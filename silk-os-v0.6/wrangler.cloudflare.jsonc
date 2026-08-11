@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "assistant-memory",
-      "database_id": "PUT_YOUR_D1_DATABASE_ID_HERE"
+      "database_id": "1dee7a70-83e5-464d-a96b-d86b5ccdc913"
     }
   ],
   "ai": {
