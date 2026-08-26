@@ -1,4 +1,4 @@
-# Deploy Silk OS v0.6 to Cloudflare — no command line
+# Deploy Silk OS v0.7 to Cloudflare — no command line
 
 You do not need to understand React, install a coding program, or type terminal commands. This path uses the GitHub and Cloudflare websites.
 
@@ -16,15 +16,15 @@ Keep the old Worker version available in **Deployments → Version history**. Cl
 
 ## Part 1 — put the supplied folder on GitHub
 
-1. Download `silk-os-v0.6.zip` and unzip it on your Mac.
+1. Download `silk-os-v0.7.zip` and unzip it on your Mac.
 2. Go to [github.com/new](https://github.com/new).
 3. Repository name: `silk-os`.
 4. Choose **Private**.
 5. Leave the README, `.gitignore`, and license boxes unchecked—the folder already contains them.
 6. Select **Create repository**.
 7. On the empty-repository page, choose **uploading an existing file**.
-8. Open the unzipped `silk-os-v0.6` folder, select everything inside it, and drag those items into GitHub.
-9. Wait for the upload list to finish, enter `Silk OS v0.6` as the commit message, then select **Commit changes**.
+8. Open the unzipped `silk-os-v0.7` folder, select everything inside it, and drag those items into GitHub.
+9. Wait for the upload list to finish, enter `Silk OS v0.7` as the commit message, then select **Commit changes**.
 
 Do not upload `node_modules`, `.env`, or a file containing an API key. They are not included in the supplied zip.
 
@@ -109,7 +109,9 @@ If a secret already exists, do not replace it. Cloudflare preserves existing sec
 | `TAVILY_API_KEY` | Current web search |
 | `GOOGLE_CLIENT_ID` | Google Calendar OAuth |
 | `GOOGLE_CLIENT_SECRET` | Google Calendar OAuth |
-| `TOKEN_ENCRYPTION_KEY` | Encrypting Google OAuth tokens in D1 |
+| `MICROSOFT_CLIENT_ID` | Microsoft OneNote OAuth |
+| `MICROSOFT_CLIENT_SECRET` | Microsoft OneNote OAuth |
+| `TOKEN_ENCRYPTION_KEY` | Encrypting Google and Microsoft OAuth tokens in D1 |
 
 Never paste any of these values into GitHub, source code, chat, or a screenshot.
 
@@ -145,6 +147,29 @@ Calendar uses Google OAuth, so Google secures the email sign-in. Silk’s owner 
 
 Google events become linked Today items. Marking one complete in Silk does not delete or modify the Google event.
 
+Calendar creation, updates, and deletion are deliberately two-step operations. Silk first creates an item in **Activity → Approval queue**. The external change runs only after you select **Approve & run**.
+
+## Part 7 — Microsoft OneNote after Calendar works
+
+Microsoft Graph and OneNote do not require a paid Azure subscription for this personal connection. You do need a free Microsoft Entra app registration.
+
+1. Open [Microsoft Entra admin center](https://entra.microsoft.com/) and go to **Applications → App registrations → New registration**.
+2. Name it `Silk OneNote`.
+3. Choose **Accounts in any organizational directory and personal Microsoft accounts**.
+4. Add this **Web** redirect URI:
+
+   `https://assistant-core.jaedennm.workers.dev/api/microsoft/callback`
+
+   If your Workers address differs, use its exact origin followed by `/api/microsoft/callback`.
+5. Under **API permissions → Microsoft Graph → Delegated permissions**, add `User.Read` and `Notes.ReadWrite`. `openid`, `email`, and `offline_access` are requested during sign-in.
+6. Under **Certificates & secrets**, create a client secret. Copy its **Value** immediately.
+7. In Cloudflare **Variables and Secrets**, add the Application (client) ID as `MICROSOFT_CLIENT_ID` and the secret value as `MICROSOFT_CLIENT_SECRET`. Save both as **Secret**.
+8. Confirm `TOKEN_ENCRYPTION_KEY` already exists. If it does not, generate a long random value in a password manager and save it as a Cloudflare Secret.
+9. Open Silk → **Connections → Connect Microsoft**.
+10. After sign-in, choose the OneNote section that should receive study records and leave automatic sync on.
+
+Silk saves the structured study record to D1 first. If OneNote is unavailable, the D1 record remains safe and shows a failed-sync status so it can be retried later.
+
 ## If something goes wrong
 
 ### Build failed
@@ -170,7 +195,7 @@ The model may not be enabled for that OpenAI project. In Cloudflare Variables an
 
 ### Roll back
 
-Open **assistant-core → Deployments → Version history**, select the version immediately before Silk OS v0.6, and use Cloudflare’s rollback control. The database is separate from Worker code and is not deleted by a code rollback.
+Open **assistant-core → Deployments → Version history**, select the version immediately before Silk OS v0.7, and use Cloudflare’s rollback control. The database is separate from Worker code and is not deleted by a code rollback.
 
 ## What you never need to do
 

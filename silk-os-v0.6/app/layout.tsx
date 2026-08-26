@@ -13,11 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Silk OS v0.6",
-  description: "A private personal operating system for Jaed.",
-  other: {
-    "codex-preview": "development",
-  },
+  title: "Silk OS v0.7",
+  description: "Jaed's private personal intelligence operating system.",
   icons: {
     icon: "/favicon.svg",
     shortcut: "/favicon.svg",

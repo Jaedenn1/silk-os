@@ -78,6 +78,9 @@ const GOOGLE_SCOPES = [
   "email",
   "https://www.googleapis.com/auth/calendar.events",
 ].join(" ");
+const MICROSOFT_SCOPES = ["openid", "email", "offline_access", "User.Read", "Notes.ReadWrite"].join(" ");
+const MICROSOFT_AUTHORITY = "https://login.microsoftonline.com/common/oauth2/v2.0";
+const MICROSOFT_GRAPH_URL = "https://graph.microsoft.com/v1.0";
 
 const DEFAULT_SETTINGS = Object.freeze({
   owner_name: "Jaed",
@@ -86,6 +89,10 @@ const DEFAULT_SETTINGS = Object.freeze({
   response_length: "concise",
   monthly_budget_cad: "2",
   facts_first: "true",
+  home_city: "Toronto, Ontario",
+  time_zone: DEFAULT_TIME_ZONE,
+  temperature_unit: "celsius",
+  morning_brief_enabled: "true",
 });
 
 const CALENDAR_DRAFT_SCHEMA = Object.freeze({
@@ -363,6 +370,27 @@ const SCHEMA_STATEMENTS = [
     id INTEGER PRIMARY KEY AUTOINCREMENT, summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 8000),
     through_message_id INTEGER NOT NULL, created_at INTEGER NOT NULL DEFAULT (unixepoch())
   )`,
+  `CREATE TABLE IF NOT EXISTS approval_requests (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    provider TEXT NOT NULL,
+    action TEXT NOT NULL,
+    target TEXT NOT NULL DEFAULT '',
+    summary TEXT NOT NULL CHECK (length(summary) BETWEEN 1 AND 500),
+    payload_json TEXT NOT NULL DEFAULT '{}',
+    risk_level TEXT NOT NULL DEFAULT 'medium' CHECK (risk_level IN ('low', 'medium', 'high')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected', 'expired')),
+    expires_at INTEGER NOT NULL,
+    resolved_at INTEGER,
+    created_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
+  "CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status, created_at DESC, id DESC)",
+  `CREATE TABLE IF NOT EXISTS weather_cache (
+    cache_key TEXT PRIMARY KEY,
+    location_label TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    expires_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+  )`,
 ];
 
 const schemaReadyByDatabase = new WeakMap();
@@ -431,7 +459,7 @@ async function routeRequest(request, env, ctx) {
     return json({
       configured: Boolean(env.APP_PASSWORD),
       authenticated: await isAuthorized(request, env),
-      version: "Silk OS v0.6",
+      version: "Silk OS v0.7",
     });
   }
 
@@ -449,6 +477,9 @@ async function routeRequest(request, env, ctx) {
   // handled before the normal session check because Google initiates the GET.
   if (request.method === "GET" && path === "/api/google/callback") {
     return googleOAuthCallback(request, env);
+  }
+  if (request.method === "GET" && path === "/api/microsoft/callback") {
+    return microsoftOAuthCallback(request, env);
   }
 
   await requireAuthorization(request, env);
@@ -499,6 +530,21 @@ async function routeRequest(request, env, ctx) {
   if (request.method === "POST" && path === "/api/google/disconnect") {
     return disconnectGoogle(env);
   }
+  if (request.method === "GET" && path === "/api/microsoft/status") {
+    return json({ microsoft: await getMicrosoftStatus(env) });
+  }
+  if (request.method === "GET" && path === "/api/microsoft/connect") {
+    return beginMicrosoftOAuth(request, env);
+  }
+  if (request.method === "POST" && path === "/api/microsoft/disconnect") {
+    return disconnectMicrosoft(env);
+  }
+  if (request.method === "GET" && path === "/api/microsoft/sections") {
+    return json({ sections: await listOneNoteSections(env) });
+  }
+  if (request.method === "PATCH" && path === "/api/microsoft/settings") {
+    return updateMicrosoftSettings(request, env);
+  }
   if (request.method === "GET" && path === "/api/calendar/events") {
     return listCalendarEventsRequest(request, env);
   }
@@ -510,7 +556,7 @@ async function routeRequest(request, env, ctx) {
     return updateCalendarEventRequest(request, env, decodeURIComponent(calendarEventMatch[1]));
   }
   if (calendarEventMatch && request.method === "DELETE") {
-    return deleteCalendarEventRequest(env, decodeURIComponent(calendarEventMatch[1]));
+    return deleteCalendarEventRequest(request, env, decodeURIComponent(calendarEventMatch[1]));
   }
 
   if (request.method === "GET" && path === "/api/web/status") {
@@ -537,7 +583,11 @@ async function routeRequest(request, env, ctx) {
 
   if (request.method === "GET" && path === "/api/study") return json(await getStudyOverview(env.DB));
   if (request.method === "POST" && path === "/api/study/parse") return parseStudyRequest(request, env);
-  if (request.method === "POST" && path === "/api/study") return createStudySession(request, env.DB);
+  if (request.method === "POST" && path === "/api/study") return createStudySession(request, env);
+  const studySyncMatch = path.match(/^\/api\/study\/(\d+)\/sync-onenote$/);
+  if (studySyncMatch && request.method === "POST") {
+    return syncStudySessionToOneNoteRequest(env, Number(studySyncMatch[1]));
+  }
   const studyMatch = path.match(/^\/api\/study\/(\d+)$/);
   if (studyMatch && request.method === "DELETE") {
     await env.DB.prepare("DELETE FROM study_sessions WHERE id = ?").bind(Number(studyMatch[1])).run();
@@ -567,6 +617,28 @@ async function routeRequest(request, env, ctx) {
   if (request.method === "GET" && path === "/api/ai/status") {
     return json({ ai: await getAIStatus(env) });
   }
+  if (request.method === "GET" && path === "/api/weather") {
+    return json({ weather: await getWeatherSummary(env) });
+  }
+  if (request.method === "GET" && path === "/api/morning-brief") {
+    return json({ brief: await getMorningBrief(env) });
+  }
+  if (request.method === "GET" && path === "/api/activity") {
+    return json({ activity: await getActivity(env.DB, url.searchParams.get("limit")) });
+  }
+  if (request.method === "GET" && path === "/api/integrations/status") {
+    return json({ integrations: await getIntegrationStatuses(env) });
+  }
+  if (request.method === "GET" && path === "/api/approvals") {
+    return json({ approvals: await getApprovals(env.DB) });
+  }
+  if (request.method === "POST" && path === "/api/approvals") {
+    return createApprovalRequest(request, env.DB);
+  }
+  const approvalMatch = path.match(/^\/api\/approvals\/(\d+)$/);
+  if (approvalMatch && request.method === "PATCH") {
+    return resolveApprovalRequest(request, env, Number(approvalMatch[1]));
+  }
 
   return json({ error: "Not found." }, 404);
 }
@@ -577,6 +649,7 @@ async function ensureSchema(db) {
     await db.batch(SCHEMA_STATEMENTS.map((sql) => db.prepare(sql)));
     await ensureUsageEventColumns(db);
     await ensureV06Columns(db);
+    await ensureV07Columns(db);
   })();
   schemaReadyByDatabase.set(db, initialization);
   try {
@@ -605,6 +678,22 @@ async function ensureV06Columns(db) {
   await db.prepare("CREATE INDEX IF NOT EXISTS idx_memories_privacy_rank ON memories(privacy, importance DESC, updated_at DESC)").run();
 }
 
+async function ensureV07Columns(db) {
+  const rows = await db.prepare("PRAGMA table_info(study_sessions)").all();
+  const existing = new Set((rows.results || []).map((row) => String(row.name)));
+  const migrations = [
+    ["onenote_page_id", "ALTER TABLE study_sessions ADD COLUMN onenote_page_id TEXT"],
+    ["onenote_sync_status", "ALTER TABLE study_sessions ADD COLUMN onenote_sync_status TEXT NOT NULL DEFAULT 'pending'"],
+    ["onenote_synced_at", "ALTER TABLE study_sessions ADD COLUMN onenote_synced_at INTEGER"],
+    ["onenote_sync_error", "ALTER TABLE study_sessions ADD COLUMN onenote_sync_error TEXT NOT NULL DEFAULT ''"],
+  ];
+  for (const [column, sql] of migrations) {
+    if (existing.has(column)) continue;
+    try { await db.prepare(sql).run(); }
+    catch (error) { if (!/duplicate column|already exists/i.test(String(error?.message || error))) throw error; }
+  }
+}
+
 async function ensureUsageEventColumns(db) {
   const rows = await db.prepare("PRAGMA table_info(usage_events)").all();
   const existing = new Set((rows.results || []).map((row) => String(row.name)));
@@ -631,7 +720,7 @@ async function ensureUsageEventColumns(db) {
 
 async function getBootstrap(env) {
   const db = env.DB;
-  const [history, memories, study, workouts, projects, settings, usage, google, web, ai, today] = await Promise.all([
+  const [history, memories, study, workouts, projects, settings, usage, google, microsoft, web, ai, today, activity, approvals] = await Promise.all([
     getHistory(db, 80),
     getMemories(db),
     getStudyOverview(db),
@@ -640,11 +729,17 @@ async function getBootstrap(env) {
     getSettings(db),
     getUsageSummary(db, env),
     getGoogleStatus(env),
+    getMicrosoftStatus(env),
     getWebSearchStatus(env),
     getAIStatus(env),
     getTodayDashboard(env),
+    getActivity(db, 18),
+    getApprovals(db),
   ]);
-  return json({ history, memories, study, workouts, projects, settings, usage, google, web, ai, today });
+  let weather = { configured: false, status: "unavailable", location: settings.home_city || "" };
+  try { weather = await getWeatherSummary(env, settings); }
+  catch (error) { weather.error = safeText(error?.message, 240); }
+  return json({ history, memories, study, workouts, projects, settings, usage, google, microsoft, web, ai, today, activity, approvals, weather });
 }
 
 async function login(request, env) {
@@ -1402,8 +1497,20 @@ async function handleDirectCommand(message, env) {
   const stripped = message.replace(/^silk[,\s:!-]*/i, "").trim();
 
   if (/\bgood morning\b/i.test(stripped)) {
-    const today=await getTodayDashboard(env); const next=today.items.find((item)=>item.status!=="done"&&item.status!=="skipped"); const calendarCount=today.items.filter((item)=>item.source_type==="calendar").length; const taskCount=today.items.filter((item)=>item.source_type!=="calendar"&&item.status!=="skipped").length;
-    return { reply:`You have ${calendarCount} calendar event${calendarCount===1?"":"s"} and ${taskCount} tracked task${taskCount===1?"":"s"} today. ${today.progress.completed} of ${today.progress.total} items are complete. ${next?`Your next item is ${next.title}. `:"Nothing else is currently queued. "}${today.deadlines.length?`${today.deadlines.length} project deadline${today.deadlines.length===1?" is":"s are"} inside the next seven days.`:"No project deadlines are due in the next seven days."}`, provider:"silk", model:"Silk workflow", model_id:"silk.today", sources:[], action:{type:"morning_brief",today} };
+    const brief = await getMorningBrief(env);
+    const weatherLine = brief.weather?.status === "ready"
+      ? `${brief.weather.location} is ${Math.round(brief.weather.temperature)}${brief.weather.unit} and ${String(brief.weather.condition).toLowerCase()}, with a high of ${Math.round(brief.weather.high)}${brief.weather.unit}. `
+      : "";
+    const calendarCount = Number(brief.calendar?.count || 0);
+    const taskCount = (brief.today?.items || []).filter((item) => item.source_type !== "calendar").length;
+    return {
+      reply: `${weatherLine}You have ${calendarCount} calendar event${calendarCount === 1 ? "" : "s"} and ${taskCount} unfinished tracked task${taskCount === 1 ? "" : "s"} today. ${brief.today.progress.completed} of ${brief.today.progress.total} items are complete. ${brief.recommendation}`,
+      provider: "silk",
+      model: "Silk workflow",
+      model_id: "silk.morning",
+      sources: [],
+      action: { type: "morning_brief", brief },
+    };
   }
   const completion=stripped.match(/^(?:i (?:just )?(?:finished|completed)|mark)\s+(.+?)(?:\s+(?:as )?done)?[.!]*$/i);
   if(completion){const needle=safeText(completion[1],200).replace(/[%_]/g,"").trim();const matches=(await db.prepare(`SELECT * FROM daily_items WHERE date_key=? AND status NOT IN ('done','skipped') AND title LIKE ? ORDER BY priority DESC,scheduled_at LIMIT 3`).bind(localDateKey(),`%${needle}%`).all()).results||[];if(matches.length===1){const item=matches[0];await db.prepare(`UPDATE daily_items SET status='done',completion_source='voice',completed_at=unixepoch(),updated_at=unixepoch() WHERE id=?`).bind(item.id).run();if(item.source_type==='project'&&item.source_id)await db.prepare(`UPDATE project_tasks SET status='done',completed_at=unixepoch(),updated_at=unixepoch() WHERE id=?`).bind(Number(item.source_id)).run();return{reply:`${item.title} is marked complete.`,provider:"silk",model:"Silk workflow",model_id:"silk.today",sources:[],action:{type:"daily_item_completed",item_id:item.id}};}if(matches.length>1)return{reply:`I found more than one possible match: ${matches.map((item)=>item.title).join(", ")}. Tell me the exact one.`,sources:[]};}
@@ -2246,6 +2353,17 @@ async function listCalendarEvents(env, from, to, maxResults = 50) {
 async function createCalendarEventRequest(request, env) {
   const body = await readJson(request);
   const event = normalizeCalendarEventInput(body);
+  if (body.confirmed !== true) {
+    const approval = await createApprovalRecord(env.DB, {
+      provider: "google",
+      action: "calendar.create",
+      target: event.summary,
+      summary: `Create “${event.summary}” in Google Calendar`,
+      payload: body,
+      risk_level: "medium",
+    });
+    return json({ requires_confirmation: true, approval }, 202);
+  }
   const response = await googleApi(env, "/calendars/primary/events", {
     method: "POST",
     body: JSON.stringify(event),
@@ -2274,6 +2392,17 @@ async function updateCalendarEventRequest(request, env, eventId) {
     patch.end = timing.end;
   }
   if (!Object.keys(patch).length) throw new HttpError(400, "No calendar changes were supplied.");
+  if (body.confirmed !== true) {
+    const approval = await createApprovalRecord(env.DB, {
+      provider: "google",
+      action: "calendar.update",
+      target: eventId,
+      summary: "Update a Google Calendar event",
+      payload: { event_id: eventId, ...body },
+      risk_level: "medium",
+    });
+    return json({ requires_confirmation: true, approval }, 202);
+  }
   const response = await googleApi(
     env,
     "/calendars/primary/events/" + encodeURIComponent(eventId),
@@ -2286,8 +2415,20 @@ async function updateCalendarEventRequest(request, env, eventId) {
   return json({ event: normalized });
 }
 
-async function deleteCalendarEventRequest(env, eventId) {
+async function deleteCalendarEventRequest(request, env, eventId) {
   if (!eventId) throw new HttpError(400, "An event ID is required.");
+  const body = await readJson(request);
+  if (body.confirmed !== true) {
+    const approval = await createApprovalRecord(env.DB, {
+      provider: "google",
+      action: "calendar.delete",
+      target: eventId,
+      summary: "Delete a Google Calendar event",
+      payload: { event_id: eventId },
+      risk_level: "high",
+    });
+    return json({ requires_confirmation: true, approval }, 202);
+  }
   const response = await googleApi(
     env,
     "/calendars/primary/events/" + encodeURIComponent(eventId),
@@ -2439,6 +2580,316 @@ async function getCalendarContext(env) {
   }
 }
 
+async function getMicrosoftStatus(env) {
+  const configured = Boolean(
+    env.MICROSOFT_CLIENT_ID && env.MICROSOFT_CLIENT_SECRET && env.TOKEN_ENCRYPTION_KEY,
+  );
+  const integration = configured
+    ? await env.DB.prepare(
+      `SELECT account_email, scope, token_expires_at, metadata_json, updated_at
+       FROM integrations WHERE provider = 'microsoft'`,
+    ).first()
+    : null;
+  const metadata = parseStoredJson(integration?.metadata_json);
+  return {
+    configured,
+    connected: Boolean(integration),
+    account_email: integration?.account_email || "",
+    scope: integration?.scope || "",
+    token_expires_at: Number(integration?.token_expires_at || 0),
+    section_id: safeText(metadata.section_id, 300),
+    section_name: safeText(metadata.section_name, 200),
+    auto_sync: metadata.auto_sync !== false,
+    redirect_path: "/api/microsoft/callback",
+  };
+}
+
+function requireMicrosoftConfiguration(env) {
+  if (!env.MICROSOFT_CLIENT_ID || !env.MICROSOFT_CLIENT_SECRET || !env.TOKEN_ENCRYPTION_KEY) {
+    throw new HttpError(
+      503,
+      "OneNote needs MICROSOFT_CLIENT_ID, MICROSOFT_CLIENT_SECRET, and TOKEN_ENCRYPTION_KEY secrets.",
+    );
+  }
+}
+
+async function beginMicrosoftOAuth(request, env) {
+  requireMicrosoftConfiguration(env);
+  const state = randomBase64Url(32);
+  const verifier = randomBase64Url(64);
+  const stateHash = await sha256Base64Url(state);
+  const challenge = await sha256Base64Url(verifier);
+  const encryptedVerifier = await encryptSecret(verifier, env.TOKEN_ENCRYPTION_KEY);
+  const expiresAt = Math.floor(Date.now() / 1000) + 10 * 60;
+  await env.DB.batch([
+    env.DB.prepare("DELETE FROM oauth_states WHERE expires_at < unixepoch()"),
+    env.DB.prepare(
+      `INSERT INTO oauth_states (state_hash, provider, code_verifier_encrypted, expires_at)
+       VALUES (?, 'microsoft', ?, ?)`,
+    ).bind(stateHash, encryptedVerifier, expiresAt),
+  ]);
+  const redirectUri = new URL("/api/microsoft/callback", request.url).toString();
+  const authorization = new URL(MICROSOFT_AUTHORITY + "/authorize");
+  authorization.search = new URLSearchParams({
+    client_id: env.MICROSOFT_CLIENT_ID,
+    redirect_uri: redirectUri,
+    response_type: "code",
+    response_mode: "query",
+    scope: MICROSOFT_SCOPES,
+    state,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    prompt: "select_account",
+  }).toString();
+  return Response.redirect(authorization.toString(), 302);
+}
+
+async function microsoftOAuthCallback(request, env) {
+  requireMicrosoftConfiguration(env);
+  const url = new URL(request.url);
+  const oauthError = safeText(url.searchParams.get("error_description") || url.searchParams.get("error"), 300);
+  if (oauthError) return redirectWithMicrosoftResult(request.url, "error", oauthError);
+  const code = safeText(url.searchParams.get("code"), 4096);
+  const state = safeText(url.searchParams.get("state"), 1024);
+  if (!code || !state) throw new HttpError(400, "Microsoft did not return a valid authorization code.");
+  const stateHash = await sha256Base64Url(state);
+  const stored = await env.DB.prepare(
+    `SELECT code_verifier_encrypted, expires_at FROM oauth_states
+     WHERE state_hash = ? AND provider = 'microsoft'`,
+  ).bind(stateHash).first();
+  await env.DB.prepare("DELETE FROM oauth_states WHERE state_hash = ?").bind(stateHash).run();
+  if (!stored || Number(stored.expires_at) < Math.floor(Date.now() / 1000)) {
+    throw new HttpError(400, "The Microsoft connection request expired. Start it again from Silk.");
+  }
+  const verifier = await decryptSecret(stored.code_verifier_encrypted, env.TOKEN_ENCRYPTION_KEY);
+  const redirectUri = new URL("/api/microsoft/callback", request.url).toString();
+  const tokenResponse = await externalFetch(env, MICROSOFT_AUTHORITY + "/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.MICROSOFT_CLIENT_ID,
+      client_secret: env.MICROSOFT_CLIENT_SECRET,
+      code,
+      redirect_uri: redirectUri,
+      grant_type: "authorization_code",
+      code_verifier: verifier,
+      scope: MICROSOFT_SCOPES,
+    }).toString(),
+  });
+  const tokenPayload = await readExternalJson(tokenResponse);
+  if (!tokenResponse.ok || !tokenPayload.access_token) {
+    console.error("Microsoft token exchange failed", tokenPayload.error || tokenResponse.status);
+    return redirectWithMicrosoftResult(request.url, "error", "Microsoft could not complete the connection.");
+  }
+  const existing = await env.DB.prepare(
+    "SELECT refresh_token_encrypted, metadata_json FROM integrations WHERE provider = 'microsoft'",
+  ).first();
+  const accessEncrypted = await encryptSecret(tokenPayload.access_token, env.TOKEN_ENCRYPTION_KEY);
+  const refreshEncrypted = tokenPayload.refresh_token
+    ? await encryptSecret(tokenPayload.refresh_token, env.TOKEN_ENCRYPTION_KEY)
+    : existing?.refresh_token_encrypted || null;
+  const expiresAt = Math.floor(Date.now() / 1000) + Math.max(60, Number(tokenPayload.expires_in || 3600) - 60);
+  let email = readJwtPayload(tokenPayload.id_token)?.preferred_username || readJwtPayload(tokenPayload.id_token)?.email || "";
+  try {
+    const profileResponse = await externalFetch(env, MICROSOFT_GRAPH_URL + "/me?$select=mail,userPrincipalName", {
+      headers: { Authorization: "Bearer " + tokenPayload.access_token },
+    });
+    const profile = await readExternalJson(profileResponse);
+    if (profileResponse.ok) email = profile.mail || profile.userPrincipalName || email;
+  } catch (error) {
+    console.error("Microsoft profile lookup failed", safeText(error?.message, 180));
+  }
+  const metadata = { auto_sync: true, ...parseStoredJson(existing?.metadata_json) };
+  await env.DB.prepare(
+    `INSERT INTO integrations
+       (provider, access_token_encrypted, refresh_token_encrypted, token_expires_at,
+        scope, account_email, metadata_json, updated_at)
+     VALUES ('microsoft', ?, ?, ?, ?, ?, ?, unixepoch())
+     ON CONFLICT(provider) DO UPDATE SET
+       access_token_encrypted = excluded.access_token_encrypted,
+       refresh_token_encrypted = COALESCE(excluded.refresh_token_encrypted, integrations.refresh_token_encrypted),
+       token_expires_at = excluded.token_expires_at,
+       scope = excluded.scope,
+       account_email = excluded.account_email,
+       metadata_json = excluded.metadata_json,
+       updated_at = unixepoch()`,
+  ).bind(accessEncrypted, refreshEncrypted, expiresAt, tokenPayload.scope || MICROSOFT_SCOPES, safeText(email, 300), JSON.stringify(metadata)).run();
+  await logAction(env.DB, "microsoft", "connect", email || "OneNote", {}, "completed");
+  return redirectWithMicrosoftResult(request.url, "connected");
+}
+
+function redirectWithMicrosoftResult(requestUrl, result, detail = "") {
+  const target = new URL("/", requestUrl);
+  target.searchParams.set("microsoft", result);
+  if (detail) target.searchParams.set("detail", detail.slice(0, 160));
+  return Response.redirect(target.toString(), 302);
+}
+
+async function disconnectMicrosoft(env) {
+  requireMicrosoftConfiguration(env);
+  await env.DB.prepare("DELETE FROM integrations WHERE provider = 'microsoft'").run();
+  await logAction(env.DB, "microsoft", "disconnect", "OneNote", {}, "completed");
+  return json({ ok: true });
+}
+
+async function getMicrosoftAccessToken(env, forceRefresh = false) {
+  requireMicrosoftConfiguration(env);
+  const integration = await env.DB.prepare(
+    `SELECT access_token_encrypted, refresh_token_encrypted, token_expires_at
+     FROM integrations WHERE provider = 'microsoft'`,
+  ).first();
+  if (!integration) throw new HttpError(409, "Connect Microsoft OneNote first.");
+  const now = Math.floor(Date.now() / 1000);
+  if (!forceRefresh && Number(integration.token_expires_at || 0) > now + 45) {
+    return decryptSecret(integration.access_token_encrypted, env.TOKEN_ENCRYPTION_KEY);
+  }
+  if (!integration.refresh_token_encrypted) throw new HttpError(401, "Microsoft OneNote needs to be reconnected.");
+  const refreshToken = await decryptSecret(integration.refresh_token_encrypted, env.TOKEN_ENCRYPTION_KEY);
+  const response = await externalFetch(env, MICROSOFT_AUTHORITY + "/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: env.MICROSOFT_CLIENT_ID,
+      client_secret: env.MICROSOFT_CLIENT_SECRET,
+      refresh_token: refreshToken,
+      grant_type: "refresh_token",
+      scope: MICROSOFT_SCOPES,
+    }).toString(),
+  });
+  const payload = await readExternalJson(response);
+  if (!response.ok || !payload.access_token) {
+    if (["invalid_grant", "interaction_required"].includes(payload.error)) {
+      await env.DB.prepare("DELETE FROM integrations WHERE provider = 'microsoft'").run();
+    }
+    throw new HttpError(401, "Microsoft authorization expired. Reconnect OneNote.");
+  }
+  const accessEncrypted = await encryptSecret(payload.access_token, env.TOKEN_ENCRYPTION_KEY);
+  const refreshEncrypted = payload.refresh_token
+    ? await encryptSecret(payload.refresh_token, env.TOKEN_ENCRYPTION_KEY)
+    : integration.refresh_token_encrypted;
+  const expiresAt = now + Math.max(60, Number(payload.expires_in || 3600) - 60);
+  await env.DB.prepare(
+    `UPDATE integrations SET access_token_encrypted = ?, refresh_token_encrypted = ?,
+     token_expires_at = ?, updated_at = unixepoch() WHERE provider = 'microsoft'`,
+  ).bind(accessEncrypted, refreshEncrypted, expiresAt).run();
+  return payload.access_token;
+}
+
+async function microsoftGraph(env, path, options = {}, retry = true) {
+  const token = await getMicrosoftAccessToken(env);
+  const headers = new Headers(options.headers || {});
+  headers.set("Authorization", "Bearer " + token);
+  const response = await externalFetch(env, MICROSOFT_GRAPH_URL + path, { ...options, headers });
+  if (response.status === 401 && retry) {
+    await getMicrosoftAccessToken(env, true);
+    return microsoftGraph(env, path, options, false);
+  }
+  return response;
+}
+
+async function listOneNoteSections(env) {
+  const response = await microsoftGraph(env, "/me/onenote/sections?$select=id,displayName,createdDateTime&$top=100");
+  const payload = await readExternalJson(response);
+  if (!response.ok) throw new HttpError(502, "Microsoft could not load your OneNote sections.");
+  return (payload.value || []).map((section) => ({
+    id: safeText(section.id, 300),
+    name: safeText(section.displayName, 200) || "Untitled section",
+    created_at: safeText(section.createdDateTime, 80),
+  }));
+}
+
+async function updateMicrosoftSettings(request, env) {
+  const body = await readJson(request);
+  const integration = await env.DB.prepare(
+    "SELECT metadata_json FROM integrations WHERE provider = 'microsoft'",
+  ).first();
+  if (!integration) throw new HttpError(409, "Connect Microsoft OneNote first.");
+  const metadata = {
+    ...parseStoredJson(integration.metadata_json),
+    section_id: normalizeShortText(body.section_id, 300, "OneNote section"),
+    section_name: safeText(body.section_name, 200),
+    auto_sync: body.auto_sync !== false,
+  };
+  await env.DB.prepare(
+    "UPDATE integrations SET metadata_json = ?, updated_at = unixepoch() WHERE provider = 'microsoft'",
+  ).bind(JSON.stringify(metadata)).run();
+  await logAction(env.DB, "microsoft", "onenote_section_selected", metadata.section_id, { name: metadata.section_name }, "completed");
+  return json({ microsoft: await getMicrosoftStatus(env) });
+}
+
+async function syncStudySessionToOneNoteRequest(env, sessionId) {
+  const session = await getStudySessionById(env.DB, sessionId);
+  if (!session) throw new HttpError(404, "That study session no longer exists.");
+  const result = await syncStudySessionToOneNote(env, session);
+  return json({ session: await getStudySessionById(env.DB, sessionId), onenote: result });
+}
+
+async function syncStudySessionToOneNote(env, session) {
+  const integration = await env.DB.prepare(
+    "SELECT metadata_json FROM integrations WHERE provider = 'microsoft'",
+  ).first();
+  const metadata = parseStoredJson(integration?.metadata_json);
+  if (!integration) throw new HttpError(409, "Connect Microsoft OneNote first.");
+  if (!metadata.section_id) throw new HttpError(409, "Choose a OneNote section before syncing study notes.");
+  await env.DB.prepare(
+    "UPDATE study_sessions SET onenote_sync_status = 'syncing', onenote_sync_error = '', updated_at = unixepoch() WHERE id = ?",
+  ).bind(session.id).run();
+  try {
+    const response = await microsoftGraph(
+      env,
+      "/me/onenote/sections/" + encodeURIComponent(metadata.section_id) + "/pages",
+      {
+        method: "POST",
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+        body: buildOneNotePageHtml(session),
+      },
+    );
+    const payload = await readExternalJson(response);
+    if (!response.ok || !payload.id) throw new HttpError(502, "Microsoft could not create the OneNote page.");
+    await env.DB.prepare(
+      `UPDATE study_sessions SET onenote_page_id = ?, onenote_sync_status = 'synced',
+       onenote_synced_at = unixepoch(), onenote_sync_error = '', updated_at = unixepoch() WHERE id = ?`,
+    ).bind(safeText(payload.id, 500), session.id).run();
+    await logAction(env.DB, "microsoft", "onenote_page_created", payload.id, {
+      session_id: session.id,
+      subject: session.subject,
+      section: metadata.section_name || metadata.section_id,
+    }, "completed");
+    return { page_id: safeText(payload.id, 500), links: payload.links || {}, section_name: metadata.section_name || "" };
+  } catch (error) {
+    const message = safeText(error?.message || "OneNote sync failed.", 500);
+    await env.DB.prepare(
+      "UPDATE study_sessions SET onenote_sync_status = 'failed', onenote_sync_error = ?, updated_at = unixepoch() WHERE id = ?",
+    ).bind(message, session.id).run();
+    await logAction(env.DB, "microsoft", "onenote_page_create", String(session.id), { error: message }, "failed");
+    throw error;
+  }
+}
+
+function buildOneNotePageHtml(session) {
+  const topics = Array.isArray(session.topics) ? session.topics : [];
+  const topicRows = topics.length
+    ? `<h2>Topic results</h2><ul>${topics.map((topic) => `<li><strong>${escapeHtml(topic.topic)}</strong>${topic.score === null || topic.score === undefined ? "" : ` — ${escapeHtml(String(topic.score))}%`}${topic.improvement_notes ? `<br><span>${escapeHtml(topic.improvement_notes)}</span>` : ""}</li>`).join("")}</ul>`
+    : "";
+  const studied = new Date(Number(session.studied_at || Math.floor(Date.now() / 1000)) * 1000).toLocaleDateString("en-CA", { timeZone: DEFAULT_TIME_ZONE });
+  return `<!DOCTYPE html><html><head><title>${escapeHtml(session.subject)} — ${escapeHtml(studied)}</title><meta name="created" content="${new Date().toISOString()}" /></head><body><h1>${escapeHtml(session.subject)}</h1><p><strong>${escapeHtml(session.session_type || "Study session")}</strong> · ${escapeHtml(studied)}${session.duration_minutes ? ` · ${escapeHtml(String(session.duration_minutes))} minutes` : ""}${session.overall_grade === null || session.overall_grade === undefined ? "" : ` · ${escapeHtml(String(session.overall_grade))}%`}</p>${session.strengths ? `<h2>What went well</h2><p>${escapeHtml(session.strengths)}</p>` : ""}${session.weaknesses ? `<h2>What needs work</h2><p>${escapeHtml(session.weaknesses)}</p>` : ""}${session.next_step ? `<h2>Recommended next step</h2><p>${escapeHtml(session.next_step)}</p>` : ""}${topicRows}<p><em>Saved automatically by Silk.</em></p></body></html>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+  })[character]);
+}
+
+function parseStoredJson(value) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
 async function getWebSearchStatus(env) {
   const start = startOfCurrentUtcMonth();
   const total = await env.DB.prepare(
@@ -2545,6 +2996,296 @@ async function logAction(db, provider, action, target, detail, status) {
   ).bind(provider, action, target || "", JSON.stringify(detail || {}), status || "completed").run();
 }
 
+async function getActivity(db, limitValue = 30) {
+  const limit = clampInteger(limitValue, 1, 100, 30);
+  const rows = (await db.prepare(
+    `SELECT id, provider, action, target, detail_json, status, created_at
+     FROM action_log ORDER BY created_at DESC, id DESC LIMIT ?`,
+  ).bind(limit).all()).results || [];
+  return rows.map((row) => ({
+    id: Number(row.id),
+    provider: String(row.provider || "silk"),
+    action: String(row.action || "activity"),
+    target: String(row.target || ""),
+    detail: parseStoredJson(row.detail_json),
+    status: String(row.status || "completed"),
+    created_at: Number(row.created_at || 0),
+  }));
+}
+
+async function createApprovalRecord(db, input) {
+  const now = Math.floor(Date.now() / 1000);
+  const approval = await db.prepare(
+    `INSERT INTO approval_requests
+     (provider, action, target, summary, payload_json, risk_level, status, expires_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)
+     RETURNING id, provider, action, target, summary, risk_level, status, expires_at, created_at`,
+  ).bind(
+    safeText(input.provider || "silk", 80) || "silk",
+    safeText(input.action || "action", 120) || "action",
+    safeText(input.target, 300),
+    normalizeShortText(input.summary, 500, "Approval summary"),
+    JSON.stringify(input.payload || {}),
+    ["low", "medium", "high"].includes(input.risk_level) ? input.risk_level : "medium",
+    now + clampInteger(input.expires_in_seconds, 60, 86400, 1800),
+  ).first();
+  await logAction(db, approval.provider, "approval_requested", String(approval.id), {
+    action: approval.action,
+    summary: approval.summary,
+    risk_level: approval.risk_level,
+  }, "pending");
+  return approval;
+}
+
+async function createApprovalRequest(request, db) {
+  const body = await readJson(request);
+  return json({ approval: await createApprovalRecord(db, body) }, 201);
+}
+
+async function getApprovals(db) {
+  await db.prepare(
+    "UPDATE approval_requests SET status = 'expired', resolved_at = unixepoch() WHERE status = 'pending' AND expires_at < unixepoch()",
+  ).run();
+  const rows = (await db.prepare(
+    `SELECT id, provider, action, target, summary, risk_level, status, expires_at, resolved_at, created_at
+     FROM approval_requests ORDER BY status = 'pending' DESC, created_at DESC, id DESC LIMIT 50`,
+  ).all()).results || [];
+  return rows.map((row) => ({ ...row, id: Number(row.id), expires_at: Number(row.expires_at), created_at: Number(row.created_at) }));
+}
+
+async function resolveApprovalRequest(request, env, id) {
+  const body = await readJson(request);
+  const status = body.status === "approved" ? "approved" : body.status === "rejected" ? "rejected" : "";
+  if (!status) throw new HttpError(400, "Choose approved or rejected.");
+  const approval = await env.DB.prepare(
+    `UPDATE approval_requests SET status = ?, resolved_at = unixepoch()
+     WHERE id = ? AND status = 'pending' AND expires_at >= unixepoch()
+     RETURNING id, provider, action, target, summary, payload_json, risk_level, status, expires_at, resolved_at, created_at`,
+  ).bind(status, id).first();
+  if (!approval) throw new HttpError(409, "That approval is no longer pending.");
+  await logAction(env.DB, approval.provider, "approval_" + status, String(id), { action: approval.action }, status);
+
+  let result = null;
+  if (status === "approved") {
+    try {
+      result = await executeApprovedAction(env, approval);
+    } catch (error) {
+      await logAction(env.DB, approval.provider, "approval_execution_failed", String(id), {
+        action: approval.action,
+        error: error instanceof Error ? error.message : "External action failed",
+      }, "failed");
+      throw error;
+    }
+  }
+
+  const safeApproval = { ...approval };
+  delete safeApproval.payload_json;
+  return json({ approval: safeApproval, executed: status === "approved", result });
+}
+
+async function executeApprovedAction(env, approval) {
+  const payload = parseStoredJson(approval.payload_json);
+  if (approval.provider !== "google") {
+    throw new HttpError(400, "This approval type cannot execute an external action yet.");
+  }
+
+  if (approval.action === "calendar.create") {
+    const event = normalizeCalendarEventInput(payload);
+    const response = await googleApi(env, "/calendars/primary/events", {
+      method: "POST",
+      body: JSON.stringify(event),
+    });
+    const responsePayload = await readExternalJson(response);
+    if (!response.ok) throw new HttpError(502, googleApiError(responsePayload, "Google could not create the event."));
+    const normalized = normalizeCalendarEvent(responsePayload);
+    await logAction(env.DB, "google", "calendar_event_created", normalized.id, {
+      approval_id: Number(approval.id),
+      summary: normalized.summary,
+      start: normalized.start,
+    }, "completed");
+    return { event: normalized };
+  }
+
+  if (approval.action === "calendar.update") {
+    const eventId = safeText(payload.event_id || approval.target, 500);
+    if (!eventId) throw new HttpError(400, "The approved Calendar event ID is missing.");
+    const patch = {};
+    if (payload.summary !== undefined) patch.summary = normalizeShortText(payload.summary, 200, "Event title");
+    if (payload.description !== undefined) patch.description = safeText(payload.description, 8000);
+    if (payload.location !== undefined) patch.location = safeText(payload.location, 500);
+    if (payload.start !== undefined || payload.end !== undefined) {
+      if (!payload.start || !payload.end) throw new HttpError(400, "Both start and end are required when changing event time.");
+      const timing = normalizeCalendarEventInput(payload);
+      patch.start = timing.start;
+      patch.end = timing.end;
+    }
+    if (!Object.keys(patch).length) throw new HttpError(400, "The approved Calendar update is empty.");
+    const response = await googleApi(env, "/calendars/primary/events/" + encodeURIComponent(eventId), {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+    });
+    const responsePayload = await readExternalJson(response);
+    if (!response.ok) throw new HttpError(502, googleApiError(responsePayload, "Google could not update the event."));
+    const normalized = normalizeCalendarEvent(responsePayload);
+    await logAction(env.DB, "google", "calendar_event_updated", normalized.id, {
+      approval_id: Number(approval.id),
+      ...patch,
+    }, "completed");
+    return { event: normalized };
+  }
+
+  if (approval.action === "calendar.delete") {
+    const eventId = safeText(payload.event_id || approval.target, 500);
+    if (!eventId) throw new HttpError(400, "The approved Calendar event ID is missing.");
+    const response = await googleApi(env, "/calendars/primary/events/" + encodeURIComponent(eventId), {
+      method: "DELETE",
+    });
+    if (!response.ok && response.status !== 204) {
+      const responsePayload = await readExternalJson(response);
+      throw new HttpError(502, googleApiError(responsePayload, "Google could not delete the event."));
+    }
+    await logAction(env.DB, "google", "calendar_event_deleted", eventId, {
+      approval_id: Number(approval.id),
+    }, "completed");
+    return { deleted: true, event_id: eventId };
+  }
+
+  throw new HttpError(400, "This approved Google action is not supported.");
+}
+
+async function getIntegrationStatuses(env) {
+  const [google, microsoft, web, settings] = await Promise.all([
+    getGoogleStatus(env),
+    getMicrosoftStatus(env),
+    getWebSearchStatus(env),
+    getSettings(env.DB),
+  ]);
+  return {
+    google_calendar: google,
+    microsoft_onenote: microsoft,
+    web_search: web,
+    weather: { configured: Boolean(settings.home_city), location: settings.home_city || "" },
+    openai: { configured: Boolean(env.OPENAI_API_KEY), server_side_secret: true },
+    cloudflare_ai: { configured: Boolean(env.AI), bound: Boolean(env.AI) },
+    apple_health: { configured: false, requires_native_companion: true },
+    local_bridge: { configured: false, available_after_device_bridge: true },
+  };
+}
+
+async function getWeatherSummary(env, knownSettings = null) {
+  const settings = knownSettings || await getSettings(env.DB);
+  const location = safeText(settings.home_city, 200);
+  if (!location) return { configured: false, status: "location_required", location: "" };
+  const cacheKey = "home:" + location.toLowerCase() + ":" + settings.temperature_unit;
+  const cached = await env.DB.prepare(
+    "SELECT location_label, payload_json, expires_at, updated_at FROM weather_cache WHERE cache_key = ?",
+  ).bind(cacheKey).first();
+  const now = Math.floor(Date.now() / 1000);
+  if (cached && Number(cached.expires_at) > now) {
+    return { ...parseStoredJson(cached.payload_json), cached: true, updated_at: Number(cached.updated_at) };
+  }
+  try {
+    const geocodeUrl = new URL("https://geocoding-api.open-meteo.com/v1/search");
+    geocodeUrl.search = new URLSearchParams({ name: location.split(",")[0].trim(), count: "5", language: "en", format: "json" }).toString();
+    const geocodeResponse = await externalFetch(env, geocodeUrl.toString());
+    const geocode = await readExternalJson(geocodeResponse);
+    const places = Array.isArray(geocode.results) ? geocode.results : [];
+    const place = places.find((candidate) => location.toLowerCase().includes(String(candidate.admin1 || "").toLowerCase())) || places[0];
+    if (!geocodeResponse.ok || !place) throw new Error("The home city could not be found.");
+    const unit = settings.temperature_unit === "fahrenheit" ? "fahrenheit" : "celsius";
+    const forecastUrl = new URL("https://api.open-meteo.com/v1/forecast");
+    forecastUrl.search = new URLSearchParams({
+      latitude: String(place.latitude),
+      longitude: String(place.longitude),
+      current: "temperature_2m,apparent_temperature,is_day,precipitation,weather_code,wind_speed_10m",
+      daily: "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset",
+      temperature_unit: unit,
+      wind_speed_unit: "kmh",
+      timezone: safeText(settings.time_zone, 80) || DEFAULT_TIME_ZONE,
+      forecast_days: "3",
+    }).toString();
+    const forecastResponse = await externalFetch(env, forecastUrl.toString());
+    const forecast = await readExternalJson(forecastResponse);
+    if (!forecastResponse.ok || !forecast.current) throw new Error("The weather service did not return a forecast.");
+    const code = Number(forecast.current.weather_code || 0);
+    const payload = {
+      configured: true,
+      status: "ready",
+      location: [place.name, place.admin1].filter(Boolean).join(", "),
+      latitude: Number(place.latitude),
+      longitude: Number(place.longitude),
+      condition: weatherCodeLabel(code),
+      weather_code: code,
+      temperature: Number(forecast.current.temperature_2m),
+      feels_like: Number(forecast.current.apparent_temperature),
+      precipitation: Number(forecast.current.precipitation || 0),
+      wind_speed: Number(forecast.current.wind_speed_10m || 0),
+      unit: unit === "fahrenheit" ? "°F" : "°C",
+      high: Number(forecast.daily?.temperature_2m_max?.[0]),
+      low: Number(forecast.daily?.temperature_2m_min?.[0]),
+      precipitation_probability: Number(forecast.daily?.precipitation_probability_max?.[0] || 0),
+      sunrise: forecast.daily?.sunrise?.[0] || "",
+      sunset: forecast.daily?.sunset?.[0] || "",
+      source: "Open-Meteo",
+      cached: false,
+      updated_at: now,
+    };
+    await env.DB.prepare(
+      `INSERT INTO weather_cache (cache_key, location_label, payload_json, expires_at, updated_at)
+       VALUES (?, ?, ?, ?, unixepoch())
+       ON CONFLICT(cache_key) DO UPDATE SET location_label = excluded.location_label,
+       payload_json = excluded.payload_json, expires_at = excluded.expires_at, updated_at = unixepoch()`,
+    ).bind(cacheKey, payload.location, JSON.stringify(payload), now + 20 * 60).run();
+    return payload;
+  } catch (error) {
+    if (cached) return { ...parseStoredJson(cached.payload_json), cached: true, stale: true, error: safeText(error?.message, 240) };
+    return { configured: true, status: "unavailable", location, error: safeText(error?.message || "Weather is temporarily unavailable.", 240) };
+  }
+}
+
+function weatherCodeLabel(code) {
+  if (code === 0) return "Clear";
+  if ([1, 2].includes(code)) return "Partly cloudy";
+  if (code === 3) return "Overcast";
+  if ([45, 48].includes(code)) return "Foggy";
+  if ([51, 53, 55, 56, 57].includes(code)) return "Drizzle";
+  if ([61, 63, 65, 66, 67, 80, 81, 82].includes(code)) return "Rain";
+  if ([71, 73, 75, 77, 85, 86].includes(code)) return "Snow";
+  if ([95, 96, 99].includes(code)) return "Thunderstorms";
+  return "Mixed conditions";
+}
+
+async function getMorningBrief(env) {
+  const [settings, today, weather, study, projects] = await Promise.all([
+    getSettings(env.DB),
+    getTodayDashboard(env),
+    getWeatherSummary(env),
+    getLatestStudySession(env.DB),
+    getProjects(env.DB),
+  ]);
+  const unfinished = today.items.filter((item) => !["done", "skipped"].includes(item.status));
+  const first = unfinished.sort((left, right) => Number(right.priority || 0) - Number(left.priority || 0))[0] || null;
+  const events = today.items.filter((item) => item.source_type === "calendar");
+  const weakest = study?.topics?.filter((topic) => topic.score !== null && topic.score !== undefined)
+    .sort((left, right) => Number(left.score) - Number(right.score))[0] || null;
+  const recommendation = first
+    ? `${first.title} is the highest-priority unfinished item. I recommend starting there.`
+    : weakest
+      ? `${weakest.topic} is your lowest recorded study result at ${weakest.score}%. I recommend reviewing it first.`
+      : "Nothing urgent is currently tracked. I recommend choosing one meaningful priority before the day fills up.";
+  return {
+    generated_at: Math.floor(Date.now() / 1000),
+    owner_name: settings.owner_name,
+    date: today.date,
+    weather,
+    calendar: { connected: (await getGoogleStatus(env)).connected, events, count: events.length },
+    today: { ...today, items: unfinished },
+    latest_study: study,
+    active_projects: projects.filter((project) => project.status === "active").slice(0, 5),
+    recommendation,
+  };
+}
+
 function parseCalendarBoundary(value, fallback) {
   const date = value ? new Date(value) : new Date(fallback);
   if (Number.isNaN(date.getTime())) throw new HttpError(400, "A calendar date is invalid.");
@@ -2597,7 +3338,7 @@ async function decryptSecret(value, secret) {
     );
     return new TextDecoder().decode(decrypted);
   } catch {
-    throw new HttpError(500, "Silk could not decrypt the Google connection. Reconnect Calendar.");
+    throw new HttpError(500, "Silk could not decrypt a stored connection. Reconnect that service.");
   }
 }
 
@@ -2940,7 +3681,8 @@ function heuristicStudyDraft(source) {
   }, source);
 }
 
-async function createStudySession(request, db) {
+async function createStudySession(request, env) {
+  const db = env.DB;
   const body = await readJson(request);
   const draft = normalizeStudyDraft(body, body.source_text || "");
   if (!draft.subject || (draft.subject === "General study" && !draft.source_text)) {
@@ -2983,13 +3725,26 @@ async function createStudySession(request, db) {
       ),
     ));
   }
-  return json({ session: await getStudySessionById(db, sessionId) }, 201);
+  let sync = { status: "pending" };
+  let session = await getStudySessionById(db, sessionId);
+  try {
+    const microsoft = await getMicrosoftStatus(env);
+    if (microsoft.connected && microsoft.section_id && microsoft.auto_sync) {
+      const result = await syncStudySessionToOneNote(env, session);
+      sync = { status: "synced", ...result };
+      session = await getStudySessionById(db, sessionId);
+    }
+  } catch (error) {
+    sync = { status: "failed", error: safeText(error?.message, 300) };
+  }
+  return json({ session, onenote: sync }, 201);
 }
 
 async function getStudyOverview(db) {
   const sessionRows = await db.prepare(
     `SELECT id, course, subject, session_type, studied_at, duration_minutes,
-            overall_grade, strengths, weaknesses, next_step, created_at
+            overall_grade, strengths, weaknesses, next_step, onenote_page_id,
+            onenote_sync_status, onenote_synced_at, onenote_sync_error, created_at
      FROM study_sessions ORDER BY studied_at DESC, id DESC LIMIT 30`,
   ).all();
   const sessions = sessionRows.results || [];
@@ -3004,8 +3759,15 @@ async function getStudyOverview(db) {
             COALESCE(SUM(duration_minutes), 0) AS total_minutes
      FROM study_sessions`,
   ).first();
+  const weakestTopics = (await db.prepare(
+    `SELECT topic, ROUND(AVG(score), 1) AS score, COUNT(*) AS attempts
+     FROM study_topics WHERE score IS NOT NULL GROUP BY lower(topic)
+     ORDER BY score ASC, attempts DESC LIMIT 8`,
+  ).all()).results || [];
   return {
     sessions,
+    latest: sessions[0] || null,
+    weakest_topics: weakestTopics,
     metrics: {
       total_sessions: Number(metrics?.total_sessions || 0),
       average_grade: metrics?.average_grade === null || metrics?.average_grade === undefined
@@ -3036,7 +3798,8 @@ async function getTopicsForSessions(db, sessionIds) {
 async function getStudySessionById(db, id) {
   const session = await db.prepare(
     `SELECT id, course, subject, session_type, studied_at, duration_minutes,
-            overall_grade, strengths, weaknesses, next_step, created_at
+            overall_grade, strengths, weaknesses, next_step, onenote_page_id,
+            onenote_sync_status, onenote_synced_at, onenote_sync_error, created_at
      FROM study_sessions WHERE id = ?`,
   ).bind(id).first();
   if (!session) return null;
@@ -3313,6 +4076,18 @@ async function updateSettings(request, db) {
       ? current.monthly_budget_cad
       : String(clampNumber(body.monthly_budget_cad, 0, 25, 2)),
     facts_first: "true",
+    home_city: body.home_city === undefined
+      ? current.home_city
+      : normalizeShortText(body.home_city, 200, "Home city"),
+    time_zone: body.time_zone === undefined
+      ? current.time_zone
+      : normalizeShortText(body.time_zone, 80, "Time zone"),
+    temperature_unit: ["celsius", "fahrenheit"].includes(body.temperature_unit)
+      ? body.temperature_unit
+      : current.temperature_unit,
+    morning_brief_enabled: body.morning_brief_enabled === false || body.morning_brief_enabled === "false"
+      ? "false"
+      : "true",
   };
   await db.batch(Object.entries(next).map(([key, value]) =>
     db.prepare(

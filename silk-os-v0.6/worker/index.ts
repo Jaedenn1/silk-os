@@ -18,6 +18,8 @@ interface Env {
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_REDIRECT_URI?: string;
+  MICROSOFT_CLIENT_ID?: string;
+  MICROSOFT_CLIENT_SECRET?: string;
   TOKEN_ENCRYPTION_KEY?: string;
   IMAGES: {
     input(stream: ReadableStream): {
@@ -68,7 +70,7 @@ function withSecurityHeaders(response: Response): Response {
   headers.set("X-Frame-Options", "DENY");
   headers.set("Referrer-Policy", "no-referrer");
   headers.set("Cross-Origin-Opener-Policy", "same-origin");
-  headers.set("Permissions-Policy", "camera=(), geolocation=(), payment=(), usb=()");
+  headers.set("Permissions-Policy", "camera=(), geolocation=(self), microphone=(self), payment=(), usb=()");
   if ((headers.get("content-type") || "").includes("text/html")) {
     headers.set("Cache-Control", "no-store");
     headers.set(

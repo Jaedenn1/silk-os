@@ -1,6 +1,6 @@
 {
-  "name": "silk-os-v06",
-  "version": "0.1.0",
+  "name": "silk-os",
+  "version": "0.7.0",
   "private": true,
   "engines": {
     "node": ">=22.13.0"
@@ -43,5 +43,5 @@
     "wrangler": "4.92.0"
   },
   "type": "module",
-  "displayName": "Silk OS v0.6"
+  "displayName": "Silk OS v0.7"
 }

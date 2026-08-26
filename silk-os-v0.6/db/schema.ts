@@ -107,6 +107,10 @@ export const studySessions = sqliteTable(
     weaknesses: text("weaknesses"),
     nextStep: text("next_step"),
     sourceText: text("source_text"),
+    oneNotePageId: text("onenote_page_id"),
+    oneNoteSyncStatus: text("onenote_sync_status").notNull().default("pending"),
+    oneNoteSyncedAt: integer("onenote_synced_at"),
+    oneNoteSyncError: text("onenote_sync_error").notNull().default(""),
     createdAt: integer("created_at").notNull().default(unixepoch),
     updatedAt: integer("updated_at").notNull().default(unixepoch),
   },
@@ -238,6 +242,37 @@ export const actionLog = sqliteTable(
   },
   (table) => [index("idx_action_log_date").on(table.createdAt, table.id)],
 );
+
+export const approvalRequests = sqliteTable(
+  "approval_requests",
+  {
+    id: integer("id").primaryKey({ autoIncrement: true }),
+    provider: text("provider").notNull(),
+    action: text("action").notNull(),
+    target: text("target").notNull().default(""),
+    summary: text("summary").notNull(),
+    payloadJson: text("payload_json").notNull().default("{}"),
+    riskLevel: text("risk_level").notNull().default("medium"),
+    status: text("status").notNull().default("pending"),
+    expiresAt: integer("expires_at").notNull(),
+    resolvedAt: integer("resolved_at"),
+    createdAt: integer("created_at").notNull().default(unixepoch),
+  },
+  (table) => [
+    check("approval_summary_length_check", sql`length(${table.summary}) between 1 and 500`),
+    check("approval_risk_check", sql`${table.riskLevel} in ('low', 'medium', 'high')`),
+    check("approval_status_check", sql`${table.status} in ('pending', 'approved', 'rejected', 'expired')`),
+    index("idx_approval_requests_status").on(table.status, table.createdAt, table.id),
+  ],
+);
+
+export const weatherCache = sqliteTable("weather_cache", {
+  cacheKey: text("cache_key").primaryKey(),
+  locationLabel: text("location_label").notNull(),
+  payloadJson: text("payload_json").notNull(),
+  expiresAt: integer("expires_at").notNull(),
+  updatedAt: integer("updated_at").notNull().default(unixepoch),
+});
 
 export const messageSources = sqliteTable(
   "message_sources",

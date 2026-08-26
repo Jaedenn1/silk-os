@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.vinext/
+.wrangler/
+.sites-runtime/
+.next/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+*.zip
+.DS_Store
+
