@@ -1,0 +1,8 @@
+{
+  "name": "silk-os-cloudflare-root",
+  "version": "0.7.0",
+  "private": true,
+  "scripts": {
+    "build": "bash ./cloudflare-root-build.sh"
+  }
+}
