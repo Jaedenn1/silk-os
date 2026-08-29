@@ -2,6 +2,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import silkCore from "./silk-core.js";
+import { classifyAutomaticChatTier, routeAutomaticModelEnv } from "./model-routing.js";
 
 interface Env {
   ASSETS: Fetcher;
@@ -46,7 +47,8 @@ const worker = {
     const url = new URL(request.url);
 
     if (url.pathname.startsWith("/api/") || url.pathname === "/manifest.webmanifest") {
-      return withSecurityHeaders(await silkCore.fetch(request, env, ctx));
+      const routedEnv = await chatRoutingEnv(request, url, env);
+      return withSecurityHeaders(await silkCore.fetch(request, routedEnv, ctx));
     }
 
     if (url.pathname === "/_vinext/image") {
@@ -63,6 +65,36 @@ const worker = {
     return withSecurityHeaders(await handler.fetch(request, env, ctx));
   },
 };
+
+async function chatRoutingEnv(request: Request, url: URL, env: Env): Promise<Env> {
+  if (request.method !== "POST" || !["/api/chat", "/api/chat/stream"].includes(url.pathname)) {
+    return env;
+  }
+
+  // Explicit Routine/Complex selections stay authoritative. The policy below
+  // only corrects the Automatic router's model choice.
+  try {
+    const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'model_mode'")
+      .first<{ value?: string }>();
+    const mode = String(row?.value || "automatic").trim().toLowerCase();
+    if (mode !== "automatic") return env;
+  } catch {
+    // On a fresh database the core will initialize the schema and use its
+    // default Automatic setting. Continue with the automatic policy here too.
+  }
+
+  let message = "";
+  try {
+    const body = await request.clone().json() as { message?: unknown };
+    message = typeof body?.message === "string" ? body.message : "";
+  } catch {
+    return env;
+  }
+  if (!message.trim()) return env;
+
+  const tier = classifyAutomaticChatTier(message);
+  return routeAutomaticModelEnv(env, tier) as Env;
+}
 
 function withSecurityHeaders(response: Response): Response {
   const headers = new Headers(response.headers);

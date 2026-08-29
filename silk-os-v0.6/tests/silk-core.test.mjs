@@ -14,6 +14,10 @@ import {
   selectRelevantMemories,
   shouldStoreMemoryCandidate,
 } from "../worker/silk-core.js";
+import {
+  classifyAutomaticChatTier,
+  routeAutomaticModelEnv,
+} from "../worker/model-routing.js";
 
 const openAIEnv = {
   PRIMARY_AI_PROVIDER: "openai",
@@ -32,6 +36,42 @@ test("automatic routing sends small, routine, and complex work to the intended m
     chooseModel("Compare these two nursing study plans and recommend the stronger one with evidence.", "automatic", "chat", openAIEnv).id,
     "gpt-5.6-terra",
   );
+});
+
+test("automatic policy keeps ordinary explanations off Terra", () => {
+  assert.equal(
+    classifyAutomaticChatTier("Explain in two sentences why sleep is important."),
+    "routine",
+  );
+  assert.equal(classifyAutomaticChatTier("Why is sleep important?"), "routine");
+  const routed = routeAutomaticModelEnv(openAIEnv, "routine");
+  assert.equal(routed.OPENAI_ROUTINE_MODEL, "gpt-5.6-luna");
+  assert.equal(routed.OPENAI_COMPLEX_MODEL, "gpt-5.6-luna");
+});
+
+test("automatic policy uses Nano for tiny arithmetic and greetings", () => {
+  assert.equal(
+    classifyAutomaticChatTier("What is 15 + 27? Answer with only the number."),
+    "micro",
+  );
+  assert.equal(classifyAutomaticChatTier("Hello"), "micro");
+  const routed = routeAutomaticModelEnv(openAIEnv, "micro");
+  assert.equal(routed.OPENAI_ROUTINE_MODEL, "gpt-5-nano");
+  assert.equal(routed.OPENAI_COMPLEX_MODEL, "gpt-5-nano");
+});
+
+test("automatic policy reserves Terra for genuinely difficult work", () => {
+  assert.equal(
+    classifyAutomaticChatTier("Compare these two nursing study plans and recommend the stronger one with evidence."),
+    "complex",
+  );
+  assert.equal(
+    classifyAutomaticChatTier("Debug this Cloudflare Worker deployment and identify the root cause."),
+    "complex",
+  );
+  const routed = routeAutomaticModelEnv(openAIEnv, "complex");
+  assert.equal(routed.OPENAI_ROUTINE_MODEL, "gpt-5.6-terra");
+  assert.equal(routed.OPENAI_COMPLEX_MODEL, "gpt-5.6-terra");
 });
 
 test("authentication comparison rejects wrong values and length mismatches", () => {
