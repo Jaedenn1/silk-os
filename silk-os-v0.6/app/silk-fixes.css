@@ -1,9 +1,26 @@
 /* SILK v0.7 shell fixes.
-   Keep the main workspace scrollable whether the transient notice banner exists or not. */
+   The app intentionally keeps the document itself fixed; the center workspace is the scroll surface. */
+html,
+body {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.silk-shell {
+  height: 100dvh;
+  min-height: 0;
+  max-height: 100dvh;
+  overflow: hidden;
+}
+
 .silk-workspace {
   display: flex;
   flex-direction: column;
+  height: 100%;
   min-height: 0;
+  min-width: 0;
+  overflow: hidden;
 }
 
 .topbar {
@@ -15,10 +32,35 @@
 }
 
 .workspace-scroll {
-  flex: 1 1 auto;
+  flex: 1 1 0%;
   min-height: 0;
-  overflow-y: auto;
+  min-width: 0;
+  overflow-y: scroll;
   overflow-x: hidden;
-  overscroll-behavior: contain;
+  overscroll-behavior-y: contain;
   -webkit-overflow-scrolling: touch;
+  scrollbar-gutter: stable;
+}
+
+/* Keep the side rails independently usable without letting them expand the shell. */
+.silk-sidebar,
+.core-rail {
+  height: 100%;
+  min-height: 0;
+}
+
+.core-rail,
+.side-nav {
+  overscroll-behavior: contain;
+}
+
+@media (max-width: 860px) {
+  .silk-shell {
+    height: 100dvh;
+    max-height: 100dvh;
+  }
+
+  .workspace-scroll {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  }
 }
