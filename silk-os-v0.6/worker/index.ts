@@ -48,7 +48,11 @@ const worker = {
 
     if (url.pathname.startsWith("/api/") || url.pathname === "/manifest.webmanifest") {
       const routedEnv = await chatRoutingEnv(request, url, env);
-      return withSecurityHeaders(await silkCore.fetch(request, routedEnv, ctx));
+      const response = await silkCore.fetch(request, routedEnv, ctx);
+      const setupHelp = response.status === 503
+        ? connectionSetupResponse(request, url, env)
+        : null;
+      return withSecurityHeaders(setupHelp || response);
     }
 
     if (url.pathname === "/_vinext/image") {
@@ -94,6 +98,85 @@ async function chatRoutingEnv(request: Request, url: URL, env: Env): Promise<Env
 
   const tier = classifyAutomaticChatTier(message);
   return routeAutomaticModelEnv(env, tier) as Env;
+}
+
+function connectionSetupResponse(request: Request, url: URL, env: Env): Response | null {
+  if (request.method !== "GET") return null;
+
+  let name = "";
+  let description = "";
+  let callbackPath = "";
+  let secrets: Array<[string, string | undefined]> = [];
+
+  if (url.pathname === "/api/google/connect") {
+    name = "Google Calendar";
+    description = "Google sign-in can start as soon as the server-side OAuth credentials are configured.";
+    callbackPath = "/api/google/callback";
+    secrets = [
+      ["GOOGLE_CLIENT_ID", env.GOOGLE_CLIENT_ID],
+      ["GOOGLE_CLIENT_SECRET", env.GOOGLE_CLIENT_SECRET],
+      ["TOKEN_ENCRYPTION_KEY", env.TOKEN_ENCRYPTION_KEY],
+    ];
+  } else if (url.pathname === "/api/microsoft/connect") {
+    name = "Microsoft OneNote";
+    description = "Microsoft sign-in can start as soon as the server-side OAuth credentials are configured.";
+    callbackPath = "/api/microsoft/callback";
+    secrets = [
+      ["MICROSOFT_CLIENT_ID", env.MICROSOFT_CLIENT_ID],
+      ["MICROSOFT_CLIENT_SECRET", env.MICROSOFT_CLIENT_SECRET],
+      ["TOKEN_ENCRYPTION_KEY", env.TOKEN_ENCRYPTION_KEY],
+    ];
+  } else {
+    return null;
+  }
+
+  const missing = secrets.filter(([, value]) => !value).map(([key]) => key);
+  if (!missing.length) return null;
+
+  const callback = new URL(callbackPath, request.url).toString();
+  const missingItems = missing.map((key) => `<li><code>${escapeHtml(key)}</code></li>`).join("");
+  const html = `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>${escapeHtml(name)} setup · SILK</title>
+  <style>
+    :root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#030a0f;color:#eaf8ff}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 70% 0,rgba(42,190,225,.13),transparent 35%),#030a0f}
+    main{width:min(680px,100%);border:1px solid rgba(114,231,255,.18);border-radius:18px;padding:28px;background:rgba(7,22,30,.94);box-shadow:0 28px 90px rgba(0,0,0,.4)}
+    .eyebrow{font:700 11px ui-monospace,monospace;letter-spacing:.18em;color:#72e7ff}h1{margin:10px 0 8px;font-size:28px}p{color:#91aab6;line-height:1.65}ol{padding-left:24px;color:#cfe7ef}li{margin:9px 0}code{color:#72ffd4;background:rgba(114,255,212,.06);border:1px solid rgba(114,255,212,.12);border-radius:7px;padding:3px 6px}.callback{display:block;overflow-wrap:anywhere;margin:10px 0 20px;padding:12px;border:1px solid rgba(114,231,255,.12);border-radius:9px;background:#02070a;color:#bcefff}a{display:inline-flex;text-decoration:none;color:#031014;background:#72e7ff;border-radius:9px;padding:10px 14px;font-weight:700}.note{font-size:12px;color:#6f8a97}
+  </style>
+</head>
+<body>
+  <main>
+    <div class="eyebrow">SILK CONNECTION SETUP</div>
+    <h1>${escapeHtml(name)} needs configuration</h1>
+    <p>${escapeHtml(description)}</p>
+    <p>Add these missing values as <strong>encrypted Worker secrets</strong> in Cloudflare:</p>
+    <ol>${missingItems}</ol>
+    <p>Use this authorized redirect/callback URI in the provider console:</p>
+    <code class="callback">${escapeHtml(callback)}</code>
+    <p class="note">Never place client secrets, encryption keys, passwords, or OAuth tokens in GitHub or browser code.</p>
+    <a href="/">Back to SILK</a>
+  </main>
+</body>
+</html>`;
+
+  return new Response(html, {
+    status: 503,
+    headers: { "Content-Type": "text/html; charset=utf-8" },
+  });
+}
+
+function escapeHtml(value: string): string {
+  return value.replace(/[&<>"']/g, (character) => ({
+    "&": "&amp;",
+    "<": "&lt;",
+    ">": "&gt;",
+    '"': "&quot;",
+    "'": "&#39;",
+  }[character] || character));
 }
 
 function withSecurityHeaders(response: Response): Response {
