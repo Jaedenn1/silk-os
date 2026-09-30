@@ -11,7 +11,7 @@ Parent roadmaps:
 
 ## Purpose
 
-This document records four approved **luxury features**, two explicitly deferred "only if we ever get there" ideas, and one **mandatory pre-launch security program** for SILK.
+This document records four approved **luxury features**, two explicitly deferred "only if we ever get there" ideas, the mandatory **SILK Vault** password/secret manager, and one **mandatory pre-launch security program** for SILK.
 
 If a future chat, agent, or developer loses the original discussion, treat this file together with the existing SILK roadmap documents as source of truth.
 
@@ -354,7 +354,10 @@ SILK may eventually handle or access:
 - device notifications
 - browser state
 - private files
-- potentially credentials or password-adjacent workflows
+- SILK Vault passwords
+- passkeys/recovery codes where technically appropriate
+- TOTP/2FA seeds if the owner chooses to store them
+- other vault-protected secrets and credentials
 
 The design target is not "perfect security"—that does not exist.
 
@@ -371,7 +374,7 @@ Security must be defense-in-depth. No single secret, process, bridge, model, dev
 1. **Least privilege everywhere.**
 2. **Local-first for the most sensitive data.**
 3. **Do not store a secret SILK does not need.**
-4. **Do not store raw passwords when system credential stores or delegated authorization can be used instead.**
+4. **Passwords are an intentional SILK feature, but plaintext credentials must exist only transiently during an explicitly authorized Vault operation. Persistent password storage belongs exclusively to the isolated, encrypted SILK Vault.**
 5. **Every external capability gets an explicit permission scope.**
 6. **Read access and write access are separate permissions.**
 7. **Consequential writes require approval by default.**
@@ -464,7 +467,7 @@ health record             SENSITIVE
 OAuth refresh token       CRITICAL_SECRET
 API key                   CRITICAL_SECRET
 session signing key       CRITICAL_SECRET
-password                  CRITICAL_SECRET (avoid storing)
+password                  CRITICAL_SECRET (SILK Vault only)
 ```
 
 Classification should influence:
@@ -478,13 +481,136 @@ Classification should influence:
 
 ---
 
-# S3. Credential and secret handling
+# S3. SILK Vault, credential, and secret handling
 
-## Avoid raw password storage
+## SILK Vault is a mandatory core subsystem
 
-SILK should **not become a password vault** unless a future design explicitly requires and secures that role.
+**Status: REQUIRED FOR FINAL SILK**
 
-Preferred approaches:
+SILK is intentionally planned to include a first-class password/secret vault so the owner can securely remember and use credentials.
+
+The Vault is **not** ordinary SILK Memory, Library data, D1 application data, or model context. It is a separate high-security domain.
+
+Target architecture:
+
+```text
+                 SILK VAULT
+                     |
+          encrypted local vault store
+                     |
+          per-vault encryption key(s)
+                     |
+       Keychain / Secure Enclave protection
+                     |
+          Face ID / Touch ID / owner auth
+```
+
+### Core Vault rules
+
+- Passwords and secrets are encrypted at rest.
+- Plaintext credentials exist only transiently in memory during an explicitly authorized Vault operation.
+- Vault plaintext must never be written to D1, logs, analytics, crash reports, prompts, embeddings, Library indexes, Activity text, or Change Journal payloads.
+- Passwords/secrets must never be sent to Apple Foundation Models, Mac-local LLMs, OpenAI, or any other generative model.
+- The AI layer may request a typed Vault action, but deterministic Vault policy and owner authentication decide whether it executes.
+- The Vault must be local-first.
+- Cloudflare must not receive plaintext passwords or the Vault decryption key.
+- If encrypted Vault synchronization is added later, synchronization must use end-to-end encrypted ciphertext designed so the sync service cannot decrypt it.
+- Key-encryption material should use Apple Keychain and Secure Enclave-backed protection where technically appropriate.
+- Vault unlock should support Face ID / Touch ID on trusted Apple devices.
+- High-risk operations may require fresh biometric/owner reauthentication even when SILK itself is already open.
+- Vault auto-lock is mandatory.
+- Lock on device lock/sleep/logout where appropriate.
+- Provide a global emergency Vault lock.
+- Clipboard copies of passwords/secrets must auto-clear after a short configurable interval.
+- Prefer direct credential filling/use through approved local mechanisms over displaying plaintext.
+- Credential reveal should require explicit user action.
+- Screenshots/screen recording of revealed secrets should be restricted where platform APIs allow; where they cannot be prevented, SILK should minimize exposure duration and warn appropriately.
+- Never put secrets into notification bodies.
+- Never expose Vault data to Applets, arbitrary agents, browser page JavaScript, external MCP servers, or Sandbox/Lab processes.
+- Only narrowly scoped, explicitly approved local capabilities may request Vault operations.
+
+### Vault data types
+
+Potential supported entries:
+
+```text
+username + password
+secure note
+recovery code
+software/license secret
+Wi-Fi credential
+API token owned by the user
+TOTP seed (optional, separately protected)
+passkey metadata/reference where platform support permits
+```
+
+OAuth tokens used internally by SILK should still use purpose-built token storage rather than being treated as normal user Vault entries.
+
+### Password-management features
+
+The eventual Vault should support:
+
+- strong password generation
+- configurable password length/character rules
+- search by service/account metadata without exposing secret values
+- duplicate/reused-password detection performed locally
+- weak-password detection performed locally
+- optional breach checking using a privacy-preserving method where feasible
+- TOTP generation if TOTP seeds are enabled
+- encrypted backup/export
+- secure import path
+- credential version/history only when encrypted and necessary
+- account notes/URLs/usernames
+- explicit per-entry reveal/copy/fill controls
+- emergency Vault lock
+- recovery procedure
+
+### Vault recovery
+
+A Vault that cannot be recovered safely is dangerous, but a recovery design that trivially bypasses encryption is worse.
+
+Before launch, define and test:
+
+- owner recovery method
+- device-loss recovery
+- encrypted backup recovery
+- recovery-key handling
+- what happens if Secure Enclave-bound material is lost
+- key rotation
+- migration between Apple devices
+- revocation of lost/stolen devices
+
+No recovery secret may be silently uploaded to Cloudflare or committed to source.
+
+### Vault capability boundary
+
+Possible capabilities:
+
+```text
+silk.vault.list_metadata
+silk.vault.search_metadata
+silk.vault.create_entry
+silk.vault.update_entry
+silk.vault.copy_secret
+silk.vault.fill_credential
+silk.vault.reveal_secret
+silk.vault.generate_password
+silk.vault.generate_totp
+silk.vault.lock
+silk.vault.unlock
+silk.vault.export_encrypted
+```
+
+Rules:
+
+- listing/searching metadata does not imply permission to reveal secrets;
+- reveal/copy/fill are separate high-risk capabilities;
+- secret-returning capabilities require owner authentication and should return data only to a trusted native Vault surface or tightly scoped local fill mechanism;
+- models should receive success/failure/status metadata, never the secret value.
+
+## Other credential approaches
+
+Where a password does not need to be stored in SILK Vault, continue to prefer:
 
 - OAuth delegated authorization
 - Sign in with Apple / provider auth
@@ -493,23 +619,18 @@ Preferred approaches:
 - app-specific tokens
 - short-lived credentials
 - scoped access tokens
+- passkeys
 
-If a password must ever be handled:
-- never write it to logs
-- never persist it in D1 by default
-- never include it in model prompts
-- never expose it to applets/workers unless explicitly required
-- prefer OS autofill/Keychain rather than SILK reading the plaintext password
+## SILK infrastructure secret storage
 
-## Secret storage
-
-- macOS/iOS secrets: Keychain
+- macOS/iOS infrastructure secrets: Keychain
 - hardware-bound key material: Secure Enclave where appropriate
 - server secrets: Cloudflare Secrets or equivalent encrypted secret manager
 - encrypted OAuth refresh tokens at rest
 - separate encryption keys from encrypted data
 - support key rotation
-- do not hard-code secrets in GitHub, JavaScript bundles, Swift source, config committed to git, or environment examples
+- do not hard-code secrets in GitHub, JavaScript bundles, Swift source, committed config, or environment examples
+- SILK infrastructure secrets and user Vault contents must remain separate security domains
 
 ---
 
@@ -995,7 +1116,15 @@ SILK is **NOT READY TO LAUNCH** until all of the following are true:
 [ ] data classification implemented
 [ ] no raw production secrets in source control
 [ ] secret scanning passes
-[ ] critical secrets stored in approved secret stores
+[ ] critical infrastructure secrets stored in approved secret stores
+[ ] SILK Vault implemented as an isolated encrypted security domain
+[ ] Vault plaintext never reaches D1, logs, prompts, embeddings, analytics, or cloud AI
+[ ] Vault keys protected with Keychain/Secure Enclave strategy where appropriate
+[ ] Vault Face ID / Touch ID or equivalent owner reauthentication works
+[ ] Vault auto-lock and emergency lock work
+[ ] clipboard auto-clear works for copied secrets
+[ ] encrypted Vault backup AND recovery tested
+[ ] lost-device Vault revocation/recovery procedure tested
 [ ] strong owner authentication implemented
 [ ] sessions hardened
 [ ] OAuth PKCE/state/redirect protections verified
@@ -1096,11 +1225,17 @@ Important:
 1. SILK Recall / Timeline
 2. Teach SILK Mode
 
+## Mandatory core subsystem
+
+**SILK Vault — encrypted password/secret manager**
+
+SILK will intentionally provide a password vault. The Vault must remain isolated from Memory, Library, D1 application data, model prompts, agents, Applets, and cloud AI. Plaintext credentials are local and transient only.
+
 ## Mandatory system-wide requirement
 
 **SILK Security Program / Launch Gate**
 
-The roadmap now explicitly treats security as a release-blocking requirement, not cleanup to perform after features are built.
+The roadmap now explicitly treats security as a release-blocking requirement, not cleanup to perform after features are built. The Vault-specific security requirements are part of that launch gate.
 
 The governing security rule is:
 
