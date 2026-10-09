@@ -3,6 +3,7 @@ import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } fr
 import handler from "vinext/server/app-router-entry";
 import silkCore from "./silk-core.js";
 import { handleSilkCalendar, calendarErrorResponse } from "./silk-calendar.js";
+import { tryHandleSilkCalendarChat } from "./silk-calendar-chat.js";
 import { classifyAutomaticChatTier, routeAutomaticModelEnv } from "./model-routing.js";
 
 interface Env {
@@ -46,6 +47,18 @@ interface ExecutionContext {
 const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (request.method === "POST" && ["/api/chat", "/api/chat/stream"].includes(url.pathname)) {
+      const authenticated = await ownerSessionIsAuthenticated(request, env, ctx);
+      if (authenticated) {
+        try {
+          const calendarChat = await tryHandleSilkCalendarChat(request, env);
+          if (calendarChat) return withSecurityHeaders(calendarChat);
+        } catch (error) {
+          console.error("SILK Calendar chat route failed", error);
+        }
+      }
+    }
 
     if (url.pathname.startsWith("/api/silk-calendar/")) {
       if (!(await ownerSessionIsAuthenticated(request, env, ctx))) {
