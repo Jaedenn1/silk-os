@@ -2,6 +2,7 @@
 import { handleImageOptimization, DEFAULT_DEVICE_SIZES, DEFAULT_IMAGE_SIZES } from "vinext/server/image-optimization";
 import handler from "vinext/server/app-router-entry";
 import silkCore from "./silk-core.js";
+import { handleSilkCalendar, calendarErrorResponse } from "./silk-calendar.js";
 import { classifyAutomaticChatTier, routeAutomaticModelEnv } from "./model-routing.js";
 
 interface Env {
@@ -46,6 +47,20 @@ const worker = {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
+    if (url.pathname.startsWith("/api/silk-calendar/")) {
+      if (!(await ownerSessionIsAuthenticated(request, env, ctx))) {
+        return withSecurityHeaders(new Response(JSON.stringify({ error: "Unlock SILK before using the calendar." }), {
+          status: 401,
+          headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+        }));
+      }
+      try {
+        return withSecurityHeaders(await handleSilkCalendar(request, env));
+      } catch (error) {
+        return withSecurityHeaders(calendarErrorResponse(error));
+      }
+    }
+
     if (url.pathname.startsWith("/api/") || url.pathname === "/manifest.webmanifest") {
       const routedEnv = await chatRoutingEnv(request, url, env);
       const response = await silkCore.fetch(request, routedEnv, ctx);
@@ -69,6 +84,21 @@ const worker = {
     return withSecurityHeaders(await handler.fetch(request, env, ctx));
   },
 };
+
+async function ownerSessionIsAuthenticated(request: Request, env: Env, ctx: ExecutionContext): Promise<boolean> {
+  try {
+    const sessionUrl = new URL("/api/session", request.url);
+    const headers = new Headers();
+    const cookie = request.headers.get("Cookie");
+    if (cookie) headers.set("Cookie", cookie);
+    const response = await silkCore.fetch(new Request(sessionUrl, { method: "GET", headers }), env, ctx);
+    if (!response.ok) return false;
+    const payload = await response.json() as { authenticated?: boolean };
+    return payload.authenticated === true;
+  } catch {
+    return false;
+  }
+}
 
 async function chatRoutingEnv(request: Request, url: URL, env: Env): Promise<Env> {
   if (request.method !== "POST" || !["/api/chat", "/api/chat/stream"].includes(url.pathname)) {
@@ -193,7 +223,7 @@ function withSecurityHeaders(response: Response): Response {
     headers.set("Cache-Control", "no-store");
     headers.set(
       "Content-Security-Policy",
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
+      "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'",
     );
   }
   return new Response(response.body, {
