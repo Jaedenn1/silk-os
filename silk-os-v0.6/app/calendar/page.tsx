@@ -1,3 +1,4 @@
+import "./calendar-page.css";
 import SilkCalendar from "./silk-calendar";
 
 export default function CalendarPage() {
