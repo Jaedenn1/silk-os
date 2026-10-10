@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import styles from "./calendar.module.css";
 
 type CompletionStatus = "none" | "pending" | "completed" | "not_completed";
@@ -171,8 +171,14 @@ export default function SilkCalendar() {
   const [ready, setReady] = useState(false);
   const [editor, setEditor] = useState<Draft | null>(null);
   const [notice, setNotice] = useState("");
+  const [saveError, setSaveError] = useState("");
   const [pending, setPending] = useState<SilkCalendarEvent[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const openEditor = useCallback((draft: Draft) => {
+    setSaveError("");
+    setEditor(draft);
+  }, []);
 
   const refreshPending = useCallback(async () => {
     try {
@@ -255,7 +261,7 @@ export default function SilkCalendar() {
           select: (info: { start: Date; end: Date; allDay: boolean }) => {
             const draft = newDraft(info.start, info.end);
             draft.all_day = info.allDay;
-            setEditor(draft);
+            openEditor(draft);
           },
           dateClick: (info: { date: Date; allDay: boolean }) => {
             const start = info.allDay
@@ -263,11 +269,11 @@ export default function SilkCalendar() {
               : info.date;
             const draft = newDraft(start, new Date(start.getTime() + 60 * 60_000));
             draft.all_day = false;
-            setEditor(draft);
+            openEditor(draft);
           },
           eventClick: (info: { event: { extendedProps?: { record?: SilkCalendarEvent } } }) => {
             const record = info.event.extendedProps?.record;
-            if (record) setEditor(draftFromEvent(record));
+            if (record) openEditor(draftFromEvent(record));
           },
           eventDrop: persistMove,
           eventResize: persistMove,
@@ -286,7 +292,7 @@ export default function SilkCalendar() {
       calendar?.destroy();
       calendarRef.current = null;
     };
-  }, [persistMove]);
+  }, [openEditor, persistMove]);
 
   useEffect(() => {
     void refreshPending();
@@ -294,9 +300,10 @@ export default function SilkCalendar() {
     return () => window.clearInterval(timer);
   }, [refreshPending]);
 
-  const saveEvent = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!editor) return;
+  const saveEvent = useCallback(async () => {
+    if (!editor || saving) return;
+
+    setSaveError("");
     setSaving(true);
     try {
       const payload = eventPayload(editor);
@@ -315,11 +322,13 @@ export default function SilkCalendar() {
       calendarRef.current?.unselect();
       refetch();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not save the event.");
+      const message = error instanceof Error ? error.message : "Could not save the event.";
+      setSaveError(message);
+      setNotice(message);
     } finally {
       setSaving(false);
     }
-  };
+  }, [editor, refetch, saving]);
 
   const removeEvent = async () => {
     if (!editor?.id) return;
@@ -331,7 +340,9 @@ export default function SilkCalendar() {
       setNotice("Event deleted.");
       refetch();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : "Could not delete the event.");
+      const message = error instanceof Error ? error.message : "Could not delete the event.";
+      setSaveError(message);
+      setNotice(message);
     } finally {
       setSaving(false);
     }
@@ -365,7 +376,7 @@ export default function SilkCalendar() {
         </div>
         <div className={styles.actions}>
           <a className={styles.secondary} href="/">Back to SILK</a>
-          <button className={styles.primary} onClick={() => setEditor(newDraft())}>+ New event</button>
+          <button className={styles.primary} onClick={() => openEditor(newDraft())}>+ New event</button>
         </div>
       </header>
 
@@ -416,16 +427,24 @@ export default function SilkCalendar() {
       </div>
 
       {editor ? (
-        <div className={styles.modalBackdrop} onMouseDown={(event) => event.currentTarget === event.target && setEditor(null)}>
-          <form className={styles.modal} onSubmit={saveEvent}>
+        <div className={styles.modalBackdrop} onMouseDown={(event) => !saving && event.currentTarget === event.target && setEditor(null)}>
+          <form
+            className={styles.modal}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void saveEvent();
+            }}
+          >
             <header className={styles.modalHeader}>
               <div>
                 <span className={styles.eyebrow}>{editor.id ? "EDIT EVENT" : "NEW EVENT"}</span>
                 <h2>{editor.id ? editor.title || "Calendar event" : "Add to SILK"}</h2>
                 {editor.id && editor.requires_completion ? <span className={styles.statusChip}>{editor.completion_status.replace("_", " ")}</span> : null}
               </div>
-              <button type="button" className={styles.close} onClick={() => setEditor(null)} aria-label="Close">×</button>
+              <button type="button" className={styles.close} disabled={saving} onClick={() => setEditor(null)} aria-label="Close">×</button>
             </header>
+
+            {saveError ? <div className={styles.notice} role="alert">{saveError}</div> : null}
 
             <div className={styles.formGrid}>
               <label className={`${styles.field} ${styles.fieldWide}`}>
@@ -477,8 +496,15 @@ export default function SilkCalendar() {
             <div className={styles.modalActions}>
               {editor.id ? <button type="button" className={styles.danger} disabled={saving} onClick={() => void removeEvent()}>Delete</button> : <span />}
               <div>
-                <button type="button" className={styles.secondary} onClick={() => setEditor(null)}>Cancel</button>
-                <button className={styles.primary} disabled={saving}>{saving ? "Saving…" : "Save event"}</button>
+                <button type="button" className={styles.secondary} disabled={saving} onClick={() => setEditor(null)}>Cancel</button>
+                <button
+                  type="button"
+                  className={styles.primary}
+                  disabled={saving}
+                  onClick={() => void saveEvent()}
+                >
+                  {saving ? "Saving…" : "Save event"}
+                </button>
               </div>
             </div>
           </form>
