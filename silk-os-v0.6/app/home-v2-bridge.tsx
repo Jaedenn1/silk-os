@@ -265,6 +265,16 @@ export default function HomeV2Bridge() {
     [data],
   );
 
+  const todayCalendarEvents = useMemo(() => {
+    const now = new Date();
+    const dayStart = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime() / 1000);
+    const dayEnd = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() / 1000);
+
+    return [...calendarEvents]
+      .filter((event) => Number(event.start_at) < dayEnd && Number(event.end_at) >= dayStart)
+      .sort((a, b) => Number(a.start_at) - Number(b.start_at));
+  }, [calendarEvents]);
+
   const nextUp = useMemo<NextUpItem | null>(() => {
     const now = Date.now() / 1000;
 
@@ -405,7 +415,8 @@ export default function HomeV2Bridge() {
   const pendingApprovals = data?.approvals.filter((item) => item.status === "pending").length || 0;
   const focus = data?.today.focus_minutes || 0;
   const weakest = String(data?.study.weakest_topics?.[0]?.topic || "Caught up");
-  const todayCount = todo.length;
+  const remainingCalendarToday = todayCalendarEvents.filter((event) => event.end_at >= Date.now() / 1000).length;
+  const todayCount = todo.length + remainingCalendarToday;
   const dateLabel = new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
   const weather = data?.weather.status === "ready" && data.weather.temperature !== undefined
     ? `${Math.round(Number(data.weather.temperature))}${data.weather.unit || "°"} · ${data.weather.condition || "Weather"}`
@@ -433,7 +444,7 @@ export default function HomeV2Bridge() {
             <h1>{greeting()}, {owner}.</h1>
             <p>
               {todayCount
-                ? `You have ${todayCount} ${todayCount === 1 ? "thing" : "things"} that matter today. ${todo[0]?.title || "Your next priority"} is at the front of the queue.`
+                ? `You have ${todayCount} ${todayCount === 1 ? "thing" : "things"} that matter today. ${nextUp?.title || todo[0]?.title || "Your next priority"} is at the front of the queue.`
                 : "Your tracked queue is clear. Pick one meaningful thing before the day fills itself for you."}
             </p>
             <div className={styles.briefChips}>
@@ -504,13 +515,25 @@ export default function HomeV2Bridge() {
         <article className={`${styles.card} ${styles.todayCard}`}>
           <header><div><span>TODAY</span><h2>Your day</h2></div><button onClick={() => openView("Today")}>Open Today <ChevronRight size={14} /></button></header>
           <div className={styles.todayList}>
-            {(data?.today.items || []).slice(0, 5).map((item) => (
-              <div key={item.id} className={`${styles.todayItem} ${item.status === "done" ? styles.done : ""}`}>
+            {todayCalendarEvents.slice(0, 5).map((event) => (
+              <div key={`calendar-${event.id}`} className={styles.todayItem}>
+                <span className={styles.taskDot}><Clock3 size={11} /></span>
+                <div>
+                  <strong>{event.title}</strong>
+                  <small>
+                    Calendar {activityLabel(event.category || "event")} · {event.all_day ? "All day" : `${clock(event.start_at)}–${clock(event.end_at)}`}
+                    {event.location ? ` · ${event.location}` : ""}
+                  </small>
+                </div>
+              </div>
+            ))}
+            {(data?.today.items || []).slice(0, Math.max(0, 5 - todayCalendarEvents.length)).map((item) => (
+              <div key={`today-${item.id}`} className={`${styles.todayItem} ${item.status === "done" ? styles.done : ""}`}>
                 <span className={styles.taskDot}>{item.status === "done" ? <Check size={12} /> : null}</span>
                 <div><strong>{item.title}</strong><small>{activityLabel(item.source_type)} · {duration(item.duration_minutes)}{item.scheduled_at ? ` · ${clock(item.scheduled_at)}` : ""}</small></div>
               </div>
             ))}
-            {!data?.today.items?.length && <p className={styles.empty}>Nothing is tracked yet. Enjoy the suspicious calm.</p>}
+            {!todayCalendarEvents.length && !data?.today.items?.length && <p className={styles.empty}>Nothing is scheduled or tracked today.</p>}
           </div>
         </article>
 
