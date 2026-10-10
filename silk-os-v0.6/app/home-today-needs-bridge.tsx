@@ -169,11 +169,11 @@ export default function HomeTodayNeedsBridge() {
     }));
 
     const tasks = (data?.today.items || [])
-      .filter((item) => item.status !== "skipped")
+      .filter((item) => Boolean(item.scheduled_at) && item.status !== "skipped")
       .map((item) => ({
         key: `task-${item.id}`,
         title: item.title,
-        meta: `${label(item.source_type || "Task")} · ${durationLabel(item.duration_minutes)}${item.scheduled_at ? ` · ${clock(item.scheduled_at)}` : ""}`,
+        meta: `${label(item.source_type || "Task")} · ${durationLabel(item.duration_minutes)} · ${clock(item.scheduled_at)}`,
         at: item.scheduled_at || null,
         done: item.status === "done",
         kind: "task" as const,
@@ -194,7 +194,7 @@ export default function HomeTodayNeedsBridge() {
     const dayEnd = Math.floor(new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1).getTime() / 1000);
     const items: NeedItem[] = [];
 
-    for (const deadline of (data?.today.deadlines || []).filter((item) => Number(item.due_at) <= dayEnd).slice(0, 2)) {
+    for (const deadline of (data?.today.deadlines || []).filter((item) => Number(item.due_at) > 0 && Number(item.due_at) <= dayEnd).slice(0, 2)) {
       items.push({
         key: `deadline-${deadline.id}`,
         title: deadline.name,
@@ -281,7 +281,7 @@ export default function HomeTodayNeedsBridge() {
                 <div><strong>{item.title}</strong><small>{item.meta}</small></div>
               </div>
             ))}
-            {!timeline.length && !loading && <p className={styles.empty}>No schedule or tasks yet today.</p>}
+            {!timeline.length && !loading && <p className={styles.empty}>No timed events or scheduled tasks yet today.</p>}
           </div>
         </section>
 
