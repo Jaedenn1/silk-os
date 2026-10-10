@@ -38,6 +38,25 @@ type DailyItem = {
   priority?: number;
 };
 
+type SilkCalendarEvent = {
+  id: number;
+  title: string;
+  start_at: number;
+  end_at: number;
+  all_day: boolean;
+  location: string;
+  category: string;
+};
+
+type NextUpItem = {
+  title: string;
+  source_type: string;
+  scheduled_at?: number | null;
+  duration_minutes?: number;
+  in_progress?: boolean;
+  location?: string;
+};
+
 type Project = {
   id: number;
   name: string;
@@ -147,6 +166,7 @@ export default function HomeV2Bridge() {
   const [active, setActive] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [data, setData] = useState<HomeData | null>(null);
+  const [calendarEvents, setCalendarEvents] = useState<SilkCalendarEvent[]>([]);
   const [preview, setPreview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [rotation, setRotation] = useState(0);
@@ -198,13 +218,34 @@ export default function HomeV2Bridge() {
       if (!session.configured) {
         setPreview(true);
         setData(null);
+        setCalendarEvents([]);
         return;
       }
       if (!session.authenticated) return;
-      const response = await fetch("/api/bootstrap", { credentials: "same-origin" });
-      if (!response.ok) return;
-      setData((await response.json()) as HomeData);
-      setPreview(false);
+
+      const now = new Date();
+      const calendarEnd = new Date(now.getTime() + 14 * 24 * 60 * 60_000);
+      const calendarQuery = new URLSearchParams({
+        from: now.toISOString(),
+        to: calendarEnd.toISOString(),
+      });
+
+      const [response, calendarResponse] = await Promise.all([
+        fetch("/api/bootstrap", { credentials: "same-origin" }),
+        fetch(`/api/silk-calendar/events?${calendarQuery}`, { credentials: "same-origin" }),
+      ]);
+
+      if (response.ok) {
+        setData((await response.json()) as HomeData);
+        setPreview(false);
+      }
+
+      if (calendarResponse.ok) {
+        const calendarPayload = (await calendarResponse.json().catch(() => ({}))) as { events?: SilkCalendarEvent[] };
+        setCalendarEvents(Array.isArray(calendarPayload.events) ? calendarPayload.events : []);
+      } else {
+        setCalendarEvents([]);
+      }
     } finally {
       setLoading(false);
     }
@@ -224,12 +265,40 @@ export default function HomeV2Bridge() {
     [data],
   );
 
-  const nextUp = useMemo(() => {
+  const nextUp = useMemo<NextUpItem | null>(() => {
     const now = Date.now() / 1000;
-    return [...(data?.today.items || [])]
+
+    const scheduledDaily = [...(data?.today.items || [])]
       .filter((item) => item.scheduled_at && Number(item.scheduled_at) >= now && !["done", "skipped"].includes(item.status))
-      .sort((a, b) => Number(a.scheduled_at) - Number(b.scheduled_at))[0] || todo[0] || null;
-  }, [data, todo]);
+      .sort((a, b) => Number(a.scheduled_at) - Number(b.scheduled_at))[0] || null;
+
+    const calendarEvent = [...calendarEvents]
+      .filter((event) => Number(event.end_at) >= now)
+      .sort((a, b) => {
+        const aEffective = Math.max(Number(a.start_at), now);
+        const bEffective = Math.max(Number(b.start_at), now);
+        return aEffective - bEffective;
+      })[0] || null;
+
+    const calendarNext: NextUpItem | null = calendarEvent
+      ? {
+          title: calendarEvent.title,
+          source_type: calendarEvent.category ? `calendar ${calendarEvent.category}` : "calendar",
+          scheduled_at: calendarEvent.start_at,
+          duration_minutes: Math.max(0, Math.round((calendarEvent.end_at - calendarEvent.start_at) / 60)),
+          in_progress: calendarEvent.start_at <= now && calendarEvent.end_at >= now,
+          location: calendarEvent.location,
+        }
+      : null;
+
+    if (calendarNext && (!scheduledDaily || Number(calendarNext.scheduled_at) <= Number(scheduledDaily.scheduled_at))) {
+      return calendarNext;
+    }
+
+    if (scheduledDaily) return scheduledDaily;
+    if (calendarNext) return calendarNext;
+    return todo[0] || null;
+  }, [calendarEvents, data, todo]);
 
   const activeProjects = useMemo(
     () => (data?.projects || []).filter((project) => project.status === "active").slice(0, 3),
@@ -461,8 +530,8 @@ export default function HomeV2Bridge() {
           {nextUp ? (
             <div className={styles.nextBody}>
               <strong>{nextUp.scheduled_at ? clock(nextUp.scheduled_at) : duration(nextUp.duration_minutes)}</strong>
-              <span>{nextUp.scheduled_at ? relativeTime(nextUp.scheduled_at) : "Ready when you are"}</span>
-              <small>{activityLabel(nextUp.source_type)} · {duration(nextUp.duration_minutes)}</small>
+              <span>{nextUp.in_progress ? "Happening now" : nextUp.scheduled_at ? relativeTime(nextUp.scheduled_at) : "Ready when you are"}</span>
+              <small>{activityLabel(nextUp.source_type)} · {duration(nextUp.duration_minutes)}{nextUp.location ? ` · ${nextUp.location}` : ""}</small>
             </div>
           ) : <p className={styles.empty}>Nothing scheduled next.</p>}
         </article>
