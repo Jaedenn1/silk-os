@@ -112,12 +112,11 @@ async function createEvent(request, db) {
   const body = await readBody(request);
   const event = normalizeInput(body, null);
 
-  const row = await db.prepare(`
+  const result = await db.prepare(`
     INSERT INTO silk_calendar_events (
       title, start_at, end_at, all_day, location, notes, category,
       requires_completion, completion_status, source, updated_at
     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch())
-    RETURNING *
   `).bind(
     event.title,
     event.start_at,
@@ -129,9 +128,20 @@ async function createEvent(request, db) {
     event.requires_completion,
     event.completion_status,
     event.source,
-  ).first();
+  ).run();
 
-  if (!row) throw new CalendarError(500, "D1 did not return the saved calendar event.");
+  if (result?.success === false) {
+    throw new CalendarError(500, "D1 rejected the calendar event write.");
+  }
+
+  const id = Number(result?.meta?.last_row_id || 0);
+  if (!id) {
+    throw new CalendarError(500, "D1 saved the calendar event but did not return its row ID.");
+  }
+
+  const row = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+  if (!row) throw new CalendarError(500, "The calendar event could not be read back after saving.");
+
   return json({ event: normalizeRow(row) }, 201);
 }
 
@@ -142,7 +152,7 @@ async function updateEvent(request, db, id) {
   const body = await readBody(request);
   const event = normalizeInput(body, normalizeRow(current));
 
-  const row = await db.prepare(`
+  const result = await db.prepare(`
     UPDATE silk_calendar_events
     SET title = ?2,
         start_at = ?3,
@@ -156,7 +166,6 @@ async function updateEvent(request, db, id) {
         source = ?11,
         updated_at = unixepoch()
     WHERE id = ?1
-    RETURNING *
   `).bind(
     id,
     event.title,
@@ -169,9 +178,15 @@ async function updateEvent(request, db, id) {
     event.requires_completion,
     event.completion_status,
     event.source,
-  ).first();
+  ).run();
 
-  if (!row) return json({ error: "Calendar event not found." }, 404);
+  if (result?.success === false) {
+    throw new CalendarError(500, "D1 rejected the calendar event update.");
+  }
+
+  const row = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+  if (!row) return json({ error: "Calendar event not found after update." }, 404);
+
   return json({ event: normalizeRow(row) });
 }
 
@@ -269,8 +284,18 @@ async function readBody(request) {
 
 export function calendarErrorResponse(error) {
   if (error instanceof CalendarError) return json({ error: error.message }, error.status);
-  console.error("SILK calendar error", error);
-  return json({ error: "SILK Calendar could not complete that request." }, 500);
+
+  const message = error instanceof Error
+    ? (error.message || error.cause?.message || "Unknown calendar database error.")
+    : "Unknown calendar database error.";
+
+  console.error("SILK calendar error", { message });
+
+  if (/\bD1(?:_|\b)/i.test(message)) {
+    return json({ error: `Calendar database error: ${message}` }, 500);
+  }
+
+  return json({ error: `SILK Calendar error: ${message}` }, 500);
 }
 
 class CalendarError extends Error {
