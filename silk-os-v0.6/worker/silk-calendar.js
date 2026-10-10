@@ -1,5 +1,7 @@
 const CATEGORY_VALUES = new Set(["personal", "work", "school", "study", "workout", "appointment", "other"]);
 const COMPLETION_VALUES = new Set(["none", "pending", "completed", "not_completed"]);
+const TABLE = "silk_calendar_events_v2";
+const LEGACY_TABLE = "silk_calendar_events";
 let schemaPromise = null;
 
 export async function handleSilkCalendar(request, env) {
@@ -38,36 +40,88 @@ export async function handleSilkCalendar(request, env) {
 
 async function ensureCalendarSchema(db) {
   if (!schemaPromise) {
-    schemaPromise = db.exec(`
-      CREATE TABLE IF NOT EXISTS silk_calendar_events (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 240),
-        start_at INTEGER NOT NULL,
-        end_at INTEGER NOT NULL,
-        all_day INTEGER NOT NULL DEFAULT 0 CHECK (all_day IN (0, 1)),
-        location TEXT NOT NULL DEFAULT '' CHECK (length(location) <= 500),
-        notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 4000),
-        category TEXT NOT NULL DEFAULT 'personal'
-          CHECK (category IN ('personal', 'work', 'school', 'study', 'workout', 'appointment', 'other')),
-        requires_completion INTEGER NOT NULL DEFAULT 0 CHECK (requires_completion IN (0, 1)),
-        completion_status TEXT NOT NULL DEFAULT 'none'
-          CHECK (completion_status IN ('none', 'pending', 'completed', 'not_completed')),
-        source TEXT NOT NULL DEFAULT 'silk' CHECK (length(source) <= 80),
-        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-        CHECK (end_at >= start_at)
-      );
-      CREATE INDEX IF NOT EXISTS idx_silk_calendar_range
-        ON silk_calendar_events(start_at, end_at, id);
-      CREATE INDEX IF NOT EXISTS idx_silk_calendar_checkins
-        ON silk_calendar_events(requires_completion, completion_status, end_at);
-    `).catch((error) => {
+    schemaPromise = (async () => {
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS ${TABLE} (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          title TEXT NOT NULL,
+          start_at INTEGER NOT NULL,
+          end_at INTEGER NOT NULL,
+          all_day INTEGER NOT NULL DEFAULT 0,
+          location TEXT NOT NULL DEFAULT '',
+          notes TEXT NOT NULL DEFAULT '',
+          category TEXT NOT NULL DEFAULT 'personal',
+          requires_completion INTEGER NOT NULL DEFAULT 0,
+          completion_status TEXT NOT NULL DEFAULT 'none',
+          source TEXT NOT NULL DEFAULT 'silk-calendar',
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `).run();
+
+      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_silk_calendar_v2_range ON ${TABLE}(start_at, end_at, id)`).run();
+      await db.prepare(`CREATE INDEX IF NOT EXISTS idx_silk_calendar_v2_checkins ON ${TABLE}(requires_completion, completion_status, end_at)`).run();
+
+      await migrateLegacyEvents(db);
+    })().catch((error) => {
       schemaPromise = null;
       throw error;
     });
   }
 
   await schemaPromise;
+}
+
+async function migrateLegacyEvents(db) {
+  const existing = await db.prepare(
+    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?1 LIMIT 1"
+  ).bind(LEGACY_TABLE).first();
+  if (!existing) return;
+
+  const countRow = await db.prepare(`SELECT COUNT(*) AS count FROM ${TABLE}`).first();
+  if (Number(countRow?.count || 0) > 0) return;
+
+  let legacyRows = [];
+  try {
+    const result = await db.prepare(`SELECT * FROM ${LEGACY_TABLE} ORDER BY id ASC LIMIT 1000`).all();
+    legacyRows = result.results || [];
+  } catch {
+    return;
+  }
+
+  for (const raw of legacyRows) {
+    const row = normalizeRow(raw);
+    if (!row?.title || !Number.isFinite(row.start_at) || !Number.isFinite(row.end_at)) continue;
+    if (row.end_at < row.start_at) continue;
+
+    const created = row.created_at || Math.floor(Date.now() / 1000);
+    const updated = row.updated_at || created;
+
+    try {
+      await db.prepare(`
+        INSERT OR IGNORE INTO ${TABLE} (
+          id, title, start_at, end_at, all_day, location, notes, category,
+          requires_completion, completion_status, source, created_at, updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
+      `).bind(
+        row.id,
+        row.title,
+        row.start_at,
+        row.end_at,
+        row.all_day ? 1 : 0,
+        row.location,
+        row.notes,
+        CATEGORY_VALUES.has(row.category) ? row.category : "personal",
+        row.requires_completion ? 1 : 0,
+        COMPLETION_VALUES.has(row.completion_status) ? row.completion_status : "none",
+        row.source || "legacy-calendar",
+        created,
+        updated,
+      ).run();
+    } catch {
+      // A malformed legacy row should never prevent the new calendar from working.
+    }
+  }
 }
 
 async function listEvents(url, db) {
@@ -79,7 +133,7 @@ async function listEvents(url, db) {
   if (to - from > 370 * 86400) return json({ error: "Calendar ranges are limited to 370 days." }, 400);
 
   const result = await db.prepare(`
-    SELECT * FROM silk_calendar_events
+    SELECT * FROM ${TABLE}
     WHERE start_at < ?2 AND end_at >= ?1
     ORDER BY start_at ASC, id ASC
     LIMIT 1000
@@ -89,7 +143,7 @@ async function listEvents(url, db) {
 }
 
 async function getEvent(db, id) {
-  const row = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+  const row = await db.prepare(`SELECT * FROM ${TABLE} WHERE id = ?1`).bind(id).first();
   if (!row) return json({ error: "Calendar event not found." }, 404);
   return json({ event: normalizeRow(row) });
 }
@@ -97,7 +151,7 @@ async function getEvent(db, id) {
 async function listPendingCheckins(db) {
   const now = Math.floor(Date.now() / 1000);
   const result = await db.prepare(`
-    SELECT * FROM silk_calendar_events
+    SELECT * FROM ${TABLE}
     WHERE requires_completion = 1
       AND completion_status = 'pending'
       AND end_at <= ?1
@@ -111,12 +165,13 @@ async function listPendingCheckins(db) {
 async function createEvent(request, db) {
   const body = await readBody(request);
   const event = normalizeInput(body, null);
+  const timestamp = Math.floor(Date.now() / 1000);
 
   const result = await db.prepare(`
-    INSERT INTO silk_calendar_events (
+    INSERT INTO ${TABLE} (
       title, start_at, end_at, all_day, location, notes, category,
-      requires_completion, completion_status, source, updated_at
-    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch())
+      requires_completion, completion_status, source, created_at, updated_at
+    ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
   `).bind(
     event.title,
     event.start_at,
@@ -128,32 +183,46 @@ async function createEvent(request, db) {
     event.requires_completion,
     event.completion_status,
     event.source,
+    timestamp,
+    timestamp,
   ).run();
 
   if (result?.success === false) {
     throw new CalendarError(500, "D1 rejected the calendar event write.");
   }
 
-  const id = Number(result?.meta?.last_row_id || 0);
-  if (!id) {
-    throw new CalendarError(500, "D1 saved the calendar event but did not return its row ID.");
+  let id = Number(result?.meta?.last_row_id || 0);
+  let row = id
+    ? await db.prepare(`SELECT * FROM ${TABLE} WHERE id = ?1`).bind(id).first()
+    : null;
+
+  if (!row) {
+    row = await db.prepare(`
+      SELECT * FROM ${TABLE}
+      WHERE title = ?1 AND start_at = ?2 AND end_at = ?3 AND created_at = ?4
+      ORDER BY id DESC
+      LIMIT 1
+    `).bind(event.title, event.start_at, event.end_at, timestamp).first();
+    id = Number(row?.id || 0);
   }
 
-  const row = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
-  if (!row) throw new CalendarError(500, "The calendar event could not be read back after saving.");
+  if (!row || !id) {
+    throw new CalendarError(500, "The calendar event write completed but could not be verified.");
+  }
 
   return json({ event: normalizeRow(row) }, 201);
 }
 
 async function updateEvent(request, db, id) {
-  const current = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+  const current = await db.prepare(`SELECT * FROM ${TABLE} WHERE id = ?1`).bind(id).first();
   if (!current) return json({ error: "Calendar event not found." }, 404);
 
   const body = await readBody(request);
   const event = normalizeInput(body, normalizeRow(current));
+  const timestamp = Math.floor(Date.now() / 1000);
 
   const result = await db.prepare(`
-    UPDATE silk_calendar_events
+    UPDATE ${TABLE}
     SET title = ?2,
         start_at = ?3,
         end_at = ?4,
@@ -164,7 +233,7 @@ async function updateEvent(request, db, id) {
         requires_completion = ?9,
         completion_status = ?10,
         source = ?11,
-        updated_at = unixepoch()
+        updated_at = ?12
     WHERE id = ?1
   `).bind(
     id,
@@ -178,21 +247,26 @@ async function updateEvent(request, db, id) {
     event.requires_completion,
     event.completion_status,
     event.source,
+    timestamp,
   ).run();
 
   if (result?.success === false) {
     throw new CalendarError(500, "D1 rejected the calendar event update.");
   }
 
-  const row = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+  const row = await db.prepare(`SELECT * FROM ${TABLE} WHERE id = ?1`).bind(id).first();
   if (!row) return json({ error: "Calendar event not found after update." }, 404);
 
   return json({ event: normalizeRow(row) });
 }
 
 async function deleteEvent(db, id) {
-  const result = await db.prepare("DELETE FROM silk_calendar_events WHERE id = ?1").bind(id).run();
-  if (!Number(result.meta?.changes || 0)) return json({ error: "Calendar event not found." }, 404);
+  const result = await db.prepare(`DELETE FROM ${TABLE} WHERE id = ?1`).bind(id).run();
+  if (result?.success === false) throw new CalendarError(500, "D1 rejected the calendar event deletion.");
+
+  const row = await db.prepare(`SELECT id FROM ${TABLE} WHERE id = ?1`).bind(id).first();
+  if (row) throw new CalendarError(500, "The calendar event still exists after deletion.");
+
   return json({ deleted: true });
 }
 
@@ -227,24 +301,24 @@ function normalizeInput(body, current) {
     category,
     requires_completion: requiresCompletion ? 1 : 0,
     completion_status: completionStatus,
-    source: cleanText(merged.source || "silk", 80) || "silk",
+    source: cleanText(merged.source || "silk-calendar", 80) || "silk-calendar",
   };
 }
 
 function normalizeRow(row) {
   if (!row) return null;
   return {
-    id: Number(row.id),
+    id: Number(row.id || 0),
     title: String(row.title || ""),
-    start_at: Number(row.start_at),
-    end_at: Number(row.end_at),
+    start_at: Number(row.start_at || 0),
+    end_at: Number(row.end_at || 0),
     all_day: Boolean(row.all_day),
     location: String(row.location || ""),
     notes: String(row.notes || ""),
     category: String(row.category || "personal"),
     requires_completion: Boolean(row.requires_completion),
     completion_status: String(row.completion_status || "none"),
-    source: String(row.source || "silk"),
+    source: String(row.source || "silk-calendar"),
     created_at: Number(row.created_at || 0),
     updated_at: Number(row.updated_at || 0),
   };
@@ -286,16 +360,11 @@ export function calendarErrorResponse(error) {
   if (error instanceof CalendarError) return json({ error: error.message }, error.status);
 
   const message = error instanceof Error
-    ? (error.message || error.cause?.message || "Unknown calendar database error.")
+    ? String(error.message || "Unknown calendar database error.")
     : "Unknown calendar database error.";
 
-  console.error("SILK calendar error", { message });
-
-  if (/\bD1(?:_|\b)/i.test(message)) {
-    return json({ error: `Calendar database error: ${message}` }, 500);
-  }
-
-  return json({ error: `SILK Calendar error: ${message}` }, 500);
+  console.error("SILK calendar error", error);
+  return json({ error: `Calendar database error: ${message}` }, 500);
 }
 
 class CalendarError extends Error {
