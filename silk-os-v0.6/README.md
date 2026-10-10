@@ -48,6 +48,12 @@ Silk is a private, cloud-first personal intelligence operating system built for 
 - Calendar writes wait for owner approval before they execute.
 - Agent creation, Apple Health, computer files, smart-home controls, and local-device control remain visibly disabled until their secure companion bridges exist.
 
+## UI / visual system roadmap
+
+The next visual direction is documented in [SILK-UI-VISUAL-SYSTEM-ROADMAP.md](./SILK-UI-VISUAL-SYSTEM-ROADMAP.md).
+
+**Important:** UI implementation does not begin by redesigning every screen at once. The agreed process is to review SILK screen-by-screen, starting with **Home**. Before code changes, decide exactly what stays, what becomes Bento, where the SILK Core lives, where the Circular Carousel sits, how the sidebar remains available, and how the layout adapts to mobile. Only after Home looks right on paper and the direction is agreed should the visual system be implemented and then deliberately propagated to Calendar, Chat, Study, and the rest of SILK.
+
 ## Deploy without a command line
 
 Follow [CLOUDFLARE-DEPLOYMENT-GUIDE.md](./CLOUDFLARE-DEPLOYMENT-GUIDE.md). It uses only GitHub and Cloudflare in your browser.
