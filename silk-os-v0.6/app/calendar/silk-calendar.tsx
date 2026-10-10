@@ -56,7 +56,7 @@ async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const response = await fetch(path, {
     credentials: "same-origin",
     ...options,
-    headers: { "Content-Type": "application/json", ...(options.headers || {}) },
+    headers: { "Content-Type": "application/json", Accept: "application/json", ...(options.headers || {}) },
   });
   const body = await response.json().catch(() => ({})) as Record<string, unknown>;
   if (response.status === 401) {
@@ -203,11 +203,12 @@ export default function SilkCalendar() {
     const fallbackDuration = Math.max(30 * 60_000, (record.end_at - record.start_at) * 1000);
     const end = event.end || new Date(event.start.getTime() + fallbackDuration);
     try {
-      await api(`/api/silk-calendar/events/${record.id}`, {
+      const result = await api<{ event: SilkCalendarEvent }>(`/api/silk-calendar/events/${record.id}`, {
         method: "PATCH",
         body: JSON.stringify({ start: event.start.toISOString(), end: end.toISOString(), all_day: event.allDay }),
       });
-      setNotice(`${record.title} moved.`);
+      if (!result.event?.id) throw new Error("SILK could not verify the moved event in D1.");
+      setNotice(`${record.title} moved and saved.`);
       refetch();
     } catch (error) {
       revert?.();
@@ -299,13 +300,17 @@ export default function SilkCalendar() {
     setSaving(true);
     try {
       const payload = eventPayload(editor);
-      if (editor.id) {
-        await api(`/api/silk-calendar/events/${editor.id}`, { method: "PATCH", body: JSON.stringify(payload) });
-        setNotice(`${editor.title} updated.`);
-      } else {
-        await api("/api/silk-calendar/events", { method: "POST", body: JSON.stringify(payload) });
-        setNotice(`${editor.title} added to SILK Calendar.`);
-      }
+      const result = editor.id
+        ? await api<{ event: SilkCalendarEvent }>(`/api/silk-calendar/events/${editor.id}`, { method: "PATCH", body: JSON.stringify(payload) })
+        : await api<{ event: SilkCalendarEvent }>("/api/silk-calendar/events", { method: "POST", body: JSON.stringify(payload) });
+
+      const savedId = Number(result.event?.id || 0);
+      if (!savedId) throw new Error("SILK did not receive a saved event ID from D1.");
+
+      const verified = await api<{ event: SilkCalendarEvent }>(`/api/silk-calendar/events/${savedId}`);
+      if (!verified.event?.id) throw new Error("SILK could not verify the saved event in D1.");
+
+      setNotice(editor.id ? `${verified.event.title} updated and saved.` : `${verified.event.title} added and saved to SILK Calendar.`);
       setEditor(null);
       calendarRef.current?.unselect();
       refetch();
@@ -334,10 +339,11 @@ export default function SilkCalendar() {
 
   const checkIn = async (calendarEvent: SilkCalendarEvent, completed: boolean) => {
     try {
-      await api(`/api/silk-calendar/events/${calendarEvent.id}`, {
+      const result = await api<{ event: SilkCalendarEvent }>(`/api/silk-calendar/events/${calendarEvent.id}`, {
         method: "PATCH",
         body: JSON.stringify({ completion_status: completed ? "completed" : "not_completed" }),
       });
+      if (!result.event?.id) throw new Error("SILK could not verify the check-in update.");
       setNotice(completed ? `${calendarEvent.title} marked complete.` : `${calendarEvent.title} marked not completed.`);
       refetch();
     } catch (error) {
