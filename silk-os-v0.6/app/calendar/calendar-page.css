@@ -1,0 +1,12 @@
+html,
+body {
+  min-height: 100%;
+  height: auto;
+  overflow-x: hidden !important;
+  overflow-y: auto !important;
+  overscroll-behavior-y: contain;
+}
+
+body {
+  -webkit-overflow-scrolling: touch;
+}
