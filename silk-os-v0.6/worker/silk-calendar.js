@@ -1,6 +1,6 @@
 const CATEGORY_VALUES = new Set(["personal", "work", "school", "study", "workout", "appointment", "other"]);
 const COMPLETION_VALUES = new Set(["none", "pending", "completed", "not_completed"]);
-let schemaReady = false;
+let schemaPromise = null;
 
 export async function handleSilkCalendar(request, env) {
   await ensureCalendarSchema(env.DB);
@@ -21,6 +21,10 @@ export async function handleSilkCalendar(request, env) {
   }
 
   const match = path.match(/^\/api\/silk-calendar\/events\/(\d+)$/);
+  if (match && request.method === "GET") {
+    return getEvent(env.DB, Number(match[1]));
+  }
+
   if (match && request.method === "PATCH") {
     return updateEvent(request, env.DB, Number(match[1]));
   }
@@ -33,34 +37,37 @@ export async function handleSilkCalendar(request, env) {
 }
 
 async function ensureCalendarSchema(db) {
-  if (schemaReady) return;
+  if (!schemaPromise) {
+    schemaPromise = db.exec(`
+      CREATE TABLE IF NOT EXISTS silk_calendar_events (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 240),
+        start_at INTEGER NOT NULL,
+        end_at INTEGER NOT NULL,
+        all_day INTEGER NOT NULL DEFAULT 0 CHECK (all_day IN (0, 1)),
+        location TEXT NOT NULL DEFAULT '' CHECK (length(location) <= 500),
+        notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 4000),
+        category TEXT NOT NULL DEFAULT 'personal'
+          CHECK (category IN ('personal', 'work', 'school', 'study', 'workout', 'appointment', 'other')),
+        requires_completion INTEGER NOT NULL DEFAULT 0 CHECK (requires_completion IN (0, 1)),
+        completion_status TEXT NOT NULL DEFAULT 'none'
+          CHECK (completion_status IN ('none', 'pending', 'completed', 'not_completed')),
+        source TEXT NOT NULL DEFAULT 'silk' CHECK (length(source) <= 80),
+        created_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
+        CHECK (end_at >= start_at)
+      );
+      CREATE INDEX IF NOT EXISTS idx_silk_calendar_range
+        ON silk_calendar_events(start_at, end_at, id);
+      CREATE INDEX IF NOT EXISTS idx_silk_calendar_checkins
+        ON silk_calendar_events(requires_completion, completion_status, end_at);
+    `).catch((error) => {
+      schemaPromise = null;
+      throw error;
+    });
+  }
 
-  await db.exec(`
-    CREATE TABLE IF NOT EXISTS silk_calendar_events (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      title TEXT NOT NULL CHECK (length(title) BETWEEN 1 AND 240),
-      start_at INTEGER NOT NULL,
-      end_at INTEGER NOT NULL,
-      all_day INTEGER NOT NULL DEFAULT 0 CHECK (all_day IN (0, 1)),
-      location TEXT NOT NULL DEFAULT '' CHECK (length(location) <= 500),
-      notes TEXT NOT NULL DEFAULT '' CHECK (length(notes) <= 4000),
-      category TEXT NOT NULL DEFAULT 'personal'
-        CHECK (category IN ('personal', 'work', 'school', 'study', 'workout', 'appointment', 'other')),
-      requires_completion INTEGER NOT NULL DEFAULT 0 CHECK (requires_completion IN (0, 1)),
-      completion_status TEXT NOT NULL DEFAULT 'none'
-        CHECK (completion_status IN ('none', 'pending', 'completed', 'not_completed')),
-      source TEXT NOT NULL DEFAULT 'silk' CHECK (length(source) <= 80),
-      created_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      updated_at INTEGER NOT NULL DEFAULT (unixepoch()),
-      CHECK (end_at >= start_at)
-    );
-    CREATE INDEX IF NOT EXISTS idx_silk_calendar_range
-      ON silk_calendar_events(start_at, end_at, id);
-    CREATE INDEX IF NOT EXISTS idx_silk_calendar_checkins
-      ON silk_calendar_events(requires_completion, completion_status, end_at);
-  `);
-
-  schemaReady = true;
+  await schemaPromise;
 }
 
 async function listEvents(url, db) {
@@ -79,6 +86,12 @@ async function listEvents(url, db) {
   `).bind(from, to).all();
 
   return json({ events: (result.results || []).map(normalizeRow) });
+}
+
+async function getEvent(db, id) {
+  const row = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+  if (!row) return json({ error: "Calendar event not found." }, 404);
+  return json({ event: normalizeRow(row) });
 }
 
 async function listPendingCheckins(db) {
@@ -117,10 +130,15 @@ async function createEvent(request, db) {
     event.source,
   ).run();
 
+  if (!Number(result.meta?.changes || 0)) {
+    throw new CalendarError(500, "D1 did not confirm the calendar event write.");
+  }
+
   const id = Number(result.meta?.last_row_id || 0);
-  const row = id
-    ? await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first()
-    : await db.prepare("SELECT * FROM silk_calendar_events ORDER BY id DESC LIMIT 1").first();
+  if (!id) throw new CalendarError(500, "D1 saved the event but did not return its ID.");
+
+  const row = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+  if (!row) throw new CalendarError(500, "The event write could not be verified after saving.");
 
   return json({ event: normalizeRow(row) }, 201);
 }
@@ -132,7 +150,7 @@ async function updateEvent(request, db, id) {
   const body = await readBody(request);
   const event = normalizeInput(body, normalizeRow(current));
 
-  await db.prepare(`
+  const result = await db.prepare(`
     UPDATE silk_calendar_events
     SET title = ?2,
         start_at = ?3,
@@ -160,7 +178,13 @@ async function updateEvent(request, db, id) {
     event.source,
   ).run();
 
+  if (!Number(result.meta?.changes || 0)) {
+    const existing = await db.prepare("SELECT id FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+    if (!existing) return json({ error: "Calendar event not found." }, 404);
+  }
+
   const row = await db.prepare("SELECT * FROM silk_calendar_events WHERE id = ?1").bind(id).first();
+  if (!row) throw new CalendarError(500, "The event update could not be verified after saving.");
   return json({ event: normalizeRow(row) });
 }
 
