@@ -79,6 +79,8 @@ type EventPlan = {
   prepStart: number;
   leaveBy: number;
   estimatedTravel: boolean;
+  prepSource?: string;
+  travelSource?: string;
 };
 
 type TimelineEntry = {
@@ -156,12 +158,37 @@ type CompletionSummary = {
 };
 
 
+type ContextTimingMetric = {
+  context: string;
+  minutes: number;
+  samples: number;
+  confidence: string;
+  confidence_score?: number;
+  weekday?: Record<string, { minutes: number; samples: number; confidence_score?: number }>;
+  daypart?: Record<string, { minutes: number; samples: number; confidence_score?: number }>;
+};
+
+type TimeTransition = {
+  from_event_id: number;
+  from_title: string;
+  to_event_id: number;
+  to_title: string;
+  gap_minutes: number;
+  required_minutes: number;
+  slack_minutes: number;
+  status: "conflict" | "tight" | "workable" | "comfortable";
+};
+
 type AdaptiveTimeProfile = {
+  version?: number;
   prep_by_category: Record<string, { minutes: number; default_minutes: number; samples: number; confidence: string; learned: boolean }>;
-  travel_by_context: Array<{ context: string; minutes: number; samples: number; confidence: string }>;
-  study: { recommended_minutes: number; samples: number; preferred_start_hour: number | null };
-  workout: { recommended_minutes: number; samples: number; preferred_start_hour: number | null };
-  underestimation: { factor: number | null; samples: number; label: string };
+  prep_by_context?: ContextTimingMetric[];
+  travel_by_context: ContextTimingMetric[];
+  travel_by_route?: ContextTimingMetric[];
+  upcoming_transitions?: TimeTransition[];
+  study: { recommended_minutes: number; samples: number; preferred_start_hour: number | null; preferred_windows?: Array<{ weekday_name: string; daypart: string; start_hour: number; samples: number }> };
+  workout: { recommended_minutes: number; samples: number; preferred_start_hour: number | null; preferred_windows?: Array<{ weekday_name: string; daypart: string; start_hour: number; samples: number }> };
+  underestimation: { factor: number | null; samples: number; label: string; by_category?: Record<string, { factor: number; samples: number; confidence: string }> };
   active_prep?: { event_id: number; title: string; category: string; planned_minutes: number; started_at: number } | null;
 };
 
@@ -240,25 +267,49 @@ function noteMinutes(notes: string | undefined, key: "prep" | "travel") {
   return Number.isFinite(value) && value >= 0 && value <= 240 ? value : null;
 }
 
-function planEvent(event: CalendarEvent, liveRoute?: RouteEstimate | null, profile?: AdaptiveTimeProfile | null): EventPlan | null {
+function torontoTiming(epoch: number) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Toronto", weekday: "short", hourCycle: "h23", hour: "2-digit" }).formatToParts(new Date(epoch * 1000));
+  const weekday = String(parts.find((part) => part.type === "weekday")?.value || "").slice(0, 3).toLowerCase();
+  const hour = Number(parts.find((part) => part.type === "hour")?.value);
+  const daypart = hour >= 5 && hour < 12 ? "morning" : hour >= 12 && hour < 17 ? "afternoon" : hour >= 17 && hour < 22 ? "evening" : "night";
+  return { weekday, daypart };
+}
+
+function contextualMetric(metrics: ContextTimingMetric[] | undefined, context: string, epoch: number) {
+  const metric = (metrics || []).find((item) => item.samples >= 2 && item.context.toLowerCase() === context.trim().toLowerCase());
+  if (!metric) return null;
+  const timing = torontoTiming(epoch);
+  const weekday = metric.weekday?.[timing.weekday];
+  const daypart = metric.daypart?.[timing.daypart];
+  const candidates = [weekday, daypart].filter(Boolean).sort((a, b) => Number(b?.confidence_score || 0) - Number(a?.confidence_score || 0));
+  return candidates[0] || metric;
+}
+
+function planEvent(event: CalendarEvent, liveRoute?: RouteEstimate | null, profile?: AdaptiveTimeProfile | null, previousEvent?: CalendarEvent | null): EventPlan | null {
   if (event.all_day || !event.start_at) return null;
   const prepOverride = noteMinutes(event.notes, "prep");
   const travelOverride = noteMinutes(event.notes, "travel");
   const liveTravel = liveRoute?.eventId === event.id ? liveRoute.travel_minutes : null;
   const category = Object.prototype.hasOwnProperty.call(DEFAULT_PREP, event.category) ? event.category : "other";
-  const learnedPrep = profile?.prep_by_category?.[category];
-  const learnedTravel = event.location.trim()
-    ? profile?.travel_by_context?.find((item) => item.samples >= 2 && item.context.toLowerCase() === event.location.trim().toLowerCase())?.minutes ?? null
-    : null;
-  const prepMinutes = prepOverride ?? (learnedPrep?.learned ? learnedPrep.minutes : DEFAULT_PREP[category] ?? 10);
-  const travelMinutes = travelOverride ?? liveTravel ?? learnedTravel ?? (event.location.trim() ? 30 : 0);
+  const context = event.location.trim() || event.title.trim();
+  const contextPrep = contextualMetric(profile?.prep_by_context, context, event.start_at);
+  const categoryPrep = profile?.prep_by_category?.[category];
+  const routeKey = previousEvent?.location?.trim() && event.location.trim() ? `${previousEvent.location.trim()} → ${event.location.trim()}` : "";
+  const routeTravel = routeKey ? contextualMetric(profile?.travel_by_route, routeKey, event.start_at) : null;
+  const destinationTravel = event.location.trim() ? contextualMetric(profile?.travel_by_context, event.location.trim(), event.start_at) : null;
+  const prepMinutes = prepOverride ?? contextPrep?.minutes ?? (categoryPrep?.learned ? categoryPrep.minutes : DEFAULT_PREP[category] ?? 10);
+  const travelMinutes = travelOverride ?? liveTravel ?? routeTravel?.minutes ?? destinationTravel?.minutes ?? (event.location.trim() ? 30 : 0);
+  const prepSource = prepOverride !== null ? "explicit" : contextPrep ? "context" : categoryPrep?.learned ? "category" : "default";
+  const travelSource = travelOverride !== null ? "explicit" : liveTravel !== null ? "live" : routeTravel ? "route" : destinationTravel ? "destination" : travelMinutes > 0 ? "default" : "none";
   const leaveBy = event.start_at - travelMinutes * 60;
   return {
     prepMinutes,
     travelMinutes,
     leaveBy,
     prepStart: leaveBy - prepMinutes * 60,
-    estimatedTravel: travelOverride === null && liveTravel === null && learnedTravel === null && travelMinutes > 0,
+    estimatedTravel: travelSource === "default",
+    prepSource,
+    travelSource,
   };
 }
 
@@ -376,7 +427,9 @@ export default function TodayV2Bridge() {
 
   const todayEvents = useMemo(() => {
     const bounds = dayBounds();
-    return events.filter((event) => event.start_at < bounds.end && event.end_at >= bounds.start);
+    return events
+      .filter((event) => event.start_at < bounds.end && event.end_at >= bounds.start)
+      .sort((a, b) => a.start_at - b.start_at);
   }, [events]);
 
   const tomorrowFirst = useMemo(() => {
@@ -387,7 +440,7 @@ export default function TodayV2Bridge() {
   }, [events]);
 
   const timeline = useMemo<TimelineEntry[]>(() => {
-    const calendarEntries: TimelineEntry[] = todayEvents.map((event) => ({
+    const calendarEntries: TimelineEntry[] = todayEvents.map((event, index) => ({
       key: `calendar-${event.id}`,
       title: event.title,
       start: event.all_day ? null : event.start_at,
@@ -398,7 +451,7 @@ export default function TodayV2Bridge() {
         ? event.completion_status === "completed"
         : event.end_at < Date.now() / 1000,
       calendarEvent: event,
-      plan: planEvent(event, routeEstimate, timeProfile),
+      plan: planEvent(event, routeEstimate, timeProfile, index > 0 ? todayEvents[index - 1] : null),
     }));
 
     const taskEntries: TimelineEntry[] = (data?.today.items || [])

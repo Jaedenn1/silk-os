@@ -1,4 +1,5 @@
-import { buildAdaptiveTimeProfile } from "./silk-time-engine.js";
+import { adaptiveEventPlan, buildAdaptiveTimeProfile } from "./silk-time-engine.js";
+export { adaptiveEventPlan };
 
 const TIME_ZONE = "America/Toronto";
 const DEFAULT_PREP = { work: 30, school: 30, study: 10, workout: 15, appointment: 20, personal: 10, other: 10 };
@@ -24,7 +25,22 @@ export async function buildSignals(db, now = Math.floor(Date.now() / 1000)) {
   const next = upcoming.find((event) => !Number(event.all_day) && Number(event.start_at) >= now - 300) || null;
 
   if (next) {
-    const plan = adaptiveEventPlan(next, profile);
+    const nextIndex = upcoming.findIndex((event) => Number(event.id) === Number(next.id));
+    const previous = nextIndex > 0 ? upcoming[nextIndex - 1] : null;
+    const plan = adaptiveEventPlan(next, profile, previous);
+    const transition = (profile?.upcoming_transitions || []).find((item) => Number(item.to_event_id) === Number(next.id));
+    if (transition && ["conflict", "tight"].includes(transition.status)) {
+      signals.push(signal(
+        `transition:${transition.from_event_id}:${transition.to_event_id}:${transition.status}`,
+        transition.status === "conflict" ? `Schedule conflict before ${next.title}` : `Tight transition before ${next.title}`,
+        transition.slack_minutes < 0
+          ? `${transition.from_title} leaves SILK about ${Math.abs(transition.slack_minutes)} minutes short once prep and travel are included.`
+          : `Only ${transition.slack_minutes} minutes of slack remain after prep and travel.`,
+        transition.status === "conflict" ? "high" : "normal",
+        "/",
+        "transition",
+      ));
+    }
     const untilStart = Math.round((Number(next.start_at) - now) / 60);
     const untilLeave = Math.round((plan.leaveBy - now) / 60);
     const untilPrep = Math.round((plan.prepStart - now) / 60);
@@ -121,22 +137,6 @@ export async function buildSignals(db, now = Math.floor(Date.now() / 1000)) {
   if (sleep) signals.push(sleep);
 
   return dedupeSignals(signals).slice(0, 8);
-}
-
-export function adaptiveEventPlan(event, profile) {
-  const category = normalizeCategory(event.category);
-  const prepOverride = noteMinutes(event.notes, "prep");
-  const travelOverride = noteMinutes(event.notes, "travel");
-  const learnedPrep = profile?.prep_by_category?.[category];
-  const prepMinutes = prepOverride ?? (learnedPrep?.learned ? Number(learnedPrep.minutes) : DEFAULT_PREP[category] || 10);
-  let travelMinutes = travelOverride;
-  if (travelMinutes == null && String(event.location || "").trim()) {
-    const learned = (profile?.travel_by_context || []).find((item) => item.context.toLowerCase() === String(event.location).trim().toLowerCase());
-    travelMinutes = learned && learned.samples >= 2 ? Number(learned.minutes) : 30;
-  }
-  travelMinutes = Number(travelMinutes || 0);
-  const leaveBy = Number(event.start_at) - travelMinutes * 60;
-  return { prepMinutes, travelMinutes, leaveBy, prepStart: leaveBy - prepMinutes * 60 };
 }
 
 async function sleepSignal(db, profile, now) {

@@ -1,3 +1,12 @@
+import {
+  adaptiveEventPlanV2,
+  buildContextMetrics,
+  buildEventTransitions,
+  localTimingContext,
+  measurementStats,
+  preferredWindows,
+} from "./silk-time-engine-v2.js";
+
 const TIME_ZONE = "America/Toronto";
 const OBSERVATION_TABLE = "silk_time_observations";
 const PREP_TABLE = "silk_prep_tracking";
@@ -57,15 +66,26 @@ export async function handleSilkTimeEngine(request, env) {
     if (!Number.isFinite(eventId) || eventId <= 0) throw new TimeEngineError(400, "A Calendar event is required to finish prep tracking.");
     const row = await env.DB.prepare(`SELECT event_id, title, category, planned_minutes, started_at FROM ${PREP_TABLE} WHERE event_id=?1`).bind(eventId).first();
     if (!row) throw new TimeEngineError(404, "SILK is not currently timing prep for that event.");
+    const calendarEvent = await env.DB.prepare(`SELECT title, location, start_at FROM silk_calendar_events_v2 WHERE id=?1`).bind(eventId).first().catch(() => null);
     const now = Math.floor(Date.now() / 1000);
     const actual = Math.max(1, Math.min(240, Math.round((now - Number(row.started_at || now)) / 60)));
+    const eventStart = Number(calendarEvent?.start_at || now);
+    const timing = localTimingContext(eventStart);
+    const location = clean(calendarEvent?.location, 180);
     await insertObservation(env.DB, {
       kind: "prep",
       category: normalizeCategory(row.category),
-      context: clean(row.title, 180),
+      context: location || clean(row.title, 180),
       planned: Number(row.planned_minutes || 0) || null,
       actual,
-      metadata: { event_id: eventId },
+      metadata: {
+        event_id: eventId,
+        title: clean(calendarEvent?.title || row.title, 180),
+        location,
+        event_start_at: eventStart,
+        weekday: timing.weekday_name,
+        daypart: timing.daypart,
+      },
       occurredAt: now,
     });
     await env.DB.prepare(`DELETE FROM ${PREP_TABLE} WHERE event_id=?1`).bind(eventId).run();
@@ -91,39 +111,47 @@ export async function buildAdaptiveTimeProfile(db) {
 
   const prepByCategory = {};
   for (const [category, fallback] of Object.entries(DEFAULT_PREP)) {
-    const samples = observations
+    const rows = observations
       .filter((row) => row.kind === "prep" && normalizeCategory(row.category) === category)
-      .map((row) => Number(row.actual_minutes))
-      .filter((value) => Number.isFinite(value) && value > 0)
-      .slice(0, 30);
-    const learned = samples.length >= 2;
+      .map((row) => ({ actual: Number(row.actual_minutes), occurredAt: Number(row.occurred_at || 0) }))
+      .filter((row) => Number.isFinite(row.actual) && row.actual > 0)
+      .slice(0, 40);
+    const stats = measurementStats(rows, fallback);
+    const learned = stats.samples >= 3 && stats.confidence_score >= 0.5;
     prepByCategory[category] = {
-      minutes: learned ? robustMinutes(samples, fallback) : fallback,
+      ...stats,
+      minutes: learned ? stats.minutes : fallback,
       default_minutes: fallback,
-      samples: samples.length,
-      confidence: confidence(samples.length),
       learned,
     };
   }
 
-  const travelGroups = new Map();
-  for (const row of observations.filter((item) => item.kind === "travel_estimate" && item.context_key)) {
-    const key = String(row.context_key).trim().toLowerCase();
-    if (!key) continue;
-    const group = travelGroups.get(key) || { context: String(row.context_key).trim(), values: [] };
-    if (group.values.length < 40) group.values.push(Number(row.actual_minutes));
-    travelGroups.set(key, group);
-  }
-  const travelByContext = [...travelGroups.values()]
-    .map((group) => ({
-      context: group.context,
-      minutes: robustMinutes(group.values.filter((value) => Number.isFinite(value) && value > 0), 30),
-      samples: group.values.length,
-      confidence: confidence(group.values.length),
-    }))
-    .filter((group) => group.samples > 0)
-    .sort((a, b) => b.samples - a.samples)
-    .slice(0, 12);
+  const prepByContext = buildContextMetrics(
+    observations
+      .filter((row) => row.kind === "prep" && row.context_key)
+      .map((row) => ({ context: String(row.context_key), actual: Number(row.actual_minutes), occurredAt: Number(row.occurred_at || 0) })),
+    { fallback: null, max: 20 },
+  );
+
+  const travelRows = observations
+    .filter((row) => row.kind === "travel_estimate" && row.context_key)
+    .map((row) => ({
+      context: String(row.context_key),
+      actual: Number(row.actual_minutes),
+      occurredAt: Number(row.occurred_at || 0),
+      metadata: parseMetadata(row.metadata_json),
+    }));
+  const travelByContext = buildContextMetrics(travelRows, { fallback: 30, max: 20 });
+  const travelByRoute = buildContextMetrics(
+    travelRows
+      .filter((row) => clean(row.metadata?.origin_context, 180))
+      .map((row) => ({
+        context: `${clean(row.metadata.origin_context, 180)} → ${row.context}`,
+        actual: row.actual,
+        occurredAt: row.occurredAt,
+      })),
+    { fallback: 30, max: 20 },
+  );
 
   const studyRows = (await db.prepare(`
     SELECT studied_at, duration_minutes FROM study_sessions
@@ -132,6 +160,7 @@ export async function buildAdaptiveTimeProfile(db) {
   `).bind(since).all().catch(() => ({ results: [] }))).results || [];
   const studyDurations = studyRows.map((row) => Number(row.duration_minutes)).filter((value) => Number.isFinite(value) && value > 0 && value <= 360);
   const studyHours = studyRows.map((row) => localHour(Number(row.studied_at || 0) * 1000)).filter(Number.isFinite);
+  const studyWindows = preferredWindows(studyRows.map((row) => Number(row.studied_at || 0)).filter((value) => value > 0));
 
   const workoutRows = (await db.prepare(`
     SELECT started_at, ended_at FROM workout_sessions
@@ -142,6 +171,7 @@ export async function buildAdaptiveTimeProfile(db) {
     .map((row) => Math.round((Number(row.ended_at) - Number(row.started_at)) / 60))
     .filter((value) => Number.isFinite(value) && value > 0 && value <= 360);
   const workoutHours = workoutRows.map((row) => localHour(Number(row.started_at || 0) * 1000)).filter(Number.isFinite);
+  const workoutWindows = preferredWindows(workoutRows.map((row) => Number(row.started_at || 0)).filter((value) => value > 0));
 
   const durationPairs = observations
     .filter((row) => row.kind === "duration" && Number(row.planned_minutes) > 0 && Number(row.actual_minutes) > 0)
@@ -157,6 +187,28 @@ export async function buildAdaptiveTimeProfile(db) {
       : factor < 0.88
         ? `Tasks are finishing about ${Math.round((1 - factor) * 100)}% faster than planned.`
         : "Planned durations are tracking close to reality.";
+  const underestimationByCategory = {};
+  for (const category of ["study", "workout", "project", "work", "school", "appointment", "personal", "other"]) {
+    const categoryRatios = durationPairs
+      .filter((row) => normalizeCategory(row.category) === category)
+      .map((row) => Number(row.actual_minutes) / Number(row.planned_minutes))
+      .filter((value) => Number.isFinite(value) && value >= 0.25 && value <= 4);
+    if (categoryRatios.length >= 2) {
+      underestimationByCategory[category] = {
+        factor: round2(median(categoryRatios)),
+        samples: categoryRatios.length,
+        confidence: confidence(categoryRatios.length),
+      };
+    }
+  }
+
+  const upcomingEvents = (await db.prepare(`
+    SELECT id, title, start_at, end_at, all_day, location, notes, category
+    FROM silk_calendar_events_v2
+    WHERE end_at >= ?1 AND start_at <= ?2
+    ORDER BY start_at, id
+    LIMIT 24
+  `).bind(now - 6 * 3600, now + 36 * 3600).all().catch(() => ({ results: [] }))).results || [];
 
   const activePrep = await db.prepare(`
     SELECT event_id, title, category, planned_minutes, started_at
@@ -164,26 +216,32 @@ export async function buildAdaptiveTimeProfile(db) {
     ORDER BY started_at DESC LIMIT 1
   `).first().catch(() => null);
 
-  return {
+  const profile = {
+    version: 2,
     generated_at: now,
     prep_by_category: prepByCategory,
+    prep_by_context: prepByContext,
     travel_by_context: travelByContext,
+    travel_by_route: travelByRoute,
     study: {
       average_minutes: studyDurations.length ? robustMinutes(studyDurations, 45) : null,
       recommended_minutes: studyDurations.length >= 3 ? clampToFive(robustMinutes(studyDurations, 45), 20, 120) : 45,
       samples: studyDurations.length,
       preferred_start_hour: studyHours.length >= 3 ? modeHour(studyHours) : null,
+      preferred_windows: studyWindows,
     },
     workout: {
       average_minutes: workoutDurations.length ? robustMinutes(workoutDurations, 60) : null,
       recommended_minutes: workoutDurations.length >= 3 ? clampToFive(robustMinutes(workoutDurations, 60), 25, 150) : 60,
       samples: workoutDurations.length,
       preferred_start_hour: workoutHours.length >= 3 ? modeHour(workoutHours) : null,
+      preferred_windows: workoutWindows,
     },
     underestimation: {
       factor,
       samples: ratios.length,
       label: underestimationLabel,
+      by_category: underestimationByCategory,
     },
     active_prep: activePrep ? {
       event_id: Number(activePrep.event_id),
@@ -200,6 +258,8 @@ export async function buildAdaptiveTimeProfile(db) {
       workout_sessions: workoutDurations.length,
     },
   };
+  profile.upcoming_transitions = buildEventTransitions(upcomingEvents, profile);
+  return profile;
 }
 
 export async function recordDurationObservation(db, { category = "other", context = "", planned, actual, occurredAt = null } = {}) {
@@ -216,6 +276,10 @@ export async function recordDurationObservation(db, { category = "other", contex
     metadata: {},
     occurredAt: Number(occurredAt) || Math.floor(Date.now() / 1000),
   });
+}
+
+export function adaptiveEventPlan(event, profile, previousEvent = null) {
+  return adaptiveEventPlanV2(event, profile, previousEvent);
 }
 
 export function sampleConfidence(samples) {
@@ -324,6 +388,15 @@ function boundedMinutes(value, allowZero) {
 function normalizeCategory(value) {
   const category = clean(value, 40).toLowerCase();
   return Object.prototype.hasOwnProperty.call(DEFAULT_PREP, category) ? category : "other";
+}
+
+function parseMetadata(value) {
+  try {
+    const parsed = JSON.parse(String(value || "{}"));
+    return objectOnly(parsed);
+  } catch {
+    return {};
+  }
 }
 
 function objectOnly(value) {

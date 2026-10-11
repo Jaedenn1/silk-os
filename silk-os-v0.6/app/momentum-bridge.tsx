@@ -57,7 +57,10 @@ type LearnedMetric = {
 type TimeProfile = {
   generated_at: number;
   prep_by_category: Record<string, LearnedMetric & { default_minutes: number; learned: boolean }>;
-  travel_by_context: Array<{ context: string; minutes: number; samples: number; confidence: string }>;
+  prep_by_context?: Array<{ context: string; minutes: number; samples: number; confidence: string; confidence_score?: number }>;
+  travel_by_context: Array<{ context: string; minutes: number; samples: number; confidence: string; confidence_score?: number }>;
+  travel_by_route?: Array<{ context: string; minutes: number; samples: number; confidence: string; confidence_score?: number }>;
+  upcoming_transitions?: Array<{ from_title: string; to_title: string; slack_minutes: number; status: string }>;
   study: { recommended_minutes: number; average_minutes: number | null; samples: number; preferred_start_hour: number | null };
   workout: { recommended_minutes: number; average_minutes: number | null; samples: number; preferred_start_hour: number | null };
   underestimation: { factor: number | null; samples: number; label: string };
@@ -234,7 +237,9 @@ export default function MomentumBridge() {
             <div><span>Study block</span><strong>{duration(profile?.study.recommended_minutes)}</strong><small>{profile?.study.samples || 0} measured sessions · preferred {clockHour(profile?.study.preferred_start_hour)}</small></div>
             <div><span>Workout length</span><strong>{duration(profile?.workout.recommended_minutes)}</strong><small>{profile?.workout.samples || 0} measured sessions · preferred {clockHour(profile?.workout.preferred_start_hour)}</small></div>
             <div><span>Planning accuracy</span><strong>{profile?.underestimation.factor ? `${profile.underestimation.factor.toFixed(2)}×` : "Learning"}</strong><small>{profile?.underestimation.label || "SILK needs matched planned vs actual durations."}</small></div>
-            <div><span>Travel contexts</span><strong>{profile?.travel_by_context.length || 0}</strong><small>recurring route patterns with measured estimates</small></div>
+            <div><span>Context prep</span><strong>{profile?.prep_by_context?.filter((item) => item.samples >= 2).length || 0}</strong><small>destinations/events with repeat prep evidence</small></div>
+            <div><span>Travel contexts</span><strong>{profile?.travel_by_context.length || 0}</strong><small>{profile?.travel_by_route?.length || 0} origin → destination route patterns</small></div>
+            <div><span>Next transition</span><strong>{profile?.upcoming_transitions?.[0]?.status ? profile.upcoming_transitions[0].status.toUpperCase() : "Clear"}</strong><small>{profile?.upcoming_transitions?.[0] ? `${profile.upcoming_transitions[0].from_title} → ${profile.upcoming_transitions[0].to_title} · ${profile.upcoming_transitions[0].slack_minutes}m slack` : "No adjacent timed events need transition planning."}</small></div>
           </div>
           <div className={styles.prepStrip}>
             {Object.entries(profile?.prep_by_category || {}).slice(0, 5).map(([category, metric]) => (
