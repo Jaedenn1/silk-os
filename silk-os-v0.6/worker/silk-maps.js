@@ -1,7 +1,10 @@
 const DEFAULT_GEOCODER = "https://photon.komoot.io";
 const DEFAULT_ROUTER = "https://valhalla1.openstreetmap.de";
 const DEFAULT_MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
+const TOMTOM_ROUTER = "https://api.tomtom.com/maps/orbis/routing/routes/calculate";
+const TOMTOM_FREE_HARD_CAP = 15000;
 const CACHE_TABLE = "silk_map_cache";
+const USAGE_TABLE = "silk_map_provider_usage";
 let schemaPromise = null;
 
 export async function handleSilkMaps(request, env) {
@@ -9,12 +12,20 @@ export async function handleSilkMaps(request, env) {
   const url = new URL(request.url);
 
   if (request.method === "GET" && url.pathname === "/api/maps/config") {
+    const trafficUsage = await readTomTomUsage(env.DB);
     return json({
       map_style_url: cleanBase(env.MAPS_TILE_STYLE_URL || DEFAULT_MAP_STYLE),
       providers: {
         tiles: env.MAPS_TILE_STYLE_URL ? "custom" : "OpenFreeMap / OpenStreetMap",
         geocoder: env.MAPS_GEOCODER_URL ? "custom" : "Photon / OpenStreetMap",
         router: env.MAPS_ROUTER_URL ? "custom" : "Valhalla / OpenStreetMap",
+        traffic: env.TOMTOM_API_KEY ? "TomTom live traffic" : "not configured",
+      },
+      zero_cost_guard: {
+        enabled: true,
+        tomtom_monthly_hard_cap: TOMTOM_FREE_HARD_CAP,
+        tomtom_requests_this_month: trafficUsage,
+        behavior_at_cap: "fall back to Valhalla; never continue into paid usage",
       },
     });
   }
@@ -52,14 +63,27 @@ async function routeRequest(request, env) {
     travel_seconds: route.seconds,
     distance_km: route.distanceKm,
     geometry: route.geometry,
+    traffic: {
+      live: Boolean(route.trafficAware),
+      delay_minutes: Math.max(0, Math.ceil(Number(route.trafficDelaySeconds || 0) / 60)),
+      delay_seconds: Math.max(0, Number(route.trafficDelaySeconds || 0)),
+      affected_km: Math.max(0, Number(route.trafficLengthKm || 0)),
+      provider: route.trafficAware ? "TomTom" : null,
+    },
     map_style_url: cleanBase(env.MAPS_TILE_STYLE_URL || DEFAULT_MAP_STYLE),
     providers: {
       geocoder: env.MAPS_GEOCODER_URL ? "custom" : "Photon",
-      router: env.MAPS_ROUTER_URL ? "custom" : "Valhalla",
+      router: route.provider,
       map: env.MAPS_TILE_STYLE_URL ? "custom" : "OpenFreeMap",
     },
+    zero_cost_guard: {
+      enabled: true,
+      tomtom_monthly_hard_cap: TOMTOM_FREE_HARD_CAP,
+      tomtom_requests_this_month: route.tomtomUsage ?? await readTomTomUsage(env.DB),
+      paid_fallback_allowed: false,
+    },
     cached: Boolean(route.cached),
-    estimate: true,
+    estimate: !route.trafficAware,
   });
 }
 
@@ -109,9 +133,96 @@ async function geocode(query, origin, env) {
 }
 
 async function routeBetween(origin, destination, mode, env) {
+  if (mode === "auto" && env.TOMTOM_API_KEY) {
+    try {
+      const trafficRoute = await routeTomTom(origin, destination, env);
+      if (trafficRoute) return trafficRoute;
+    } catch (error) {
+      console.warn("SILK live traffic route unavailable; falling back to Valhalla", error);
+    }
+  }
+
+  return routeValhalla(origin, destination, mode, env);
+}
+
+async function routeTomTom(origin, destination, env) {
   const rounded = (value) => Number(value).toFixed(4);
   const key = [
-    "route:v1",
+    "route:tomtom-live:v1",
+    rounded(origin.lat),
+    rounded(origin.lon),
+    rounded(destination.lat),
+    rounded(destination.lon),
+  ].join(":");
+
+  const cached = await readCache(env.DB, key);
+  if (cached) return { ...cached, cached: true, tomtomUsage: await readTomTomUsage(env.DB) };
+
+  const budget = await consumeTomTomRequestBudget(env.DB);
+  if (!budget.allowed) return null;
+
+  const response = await fetchWithTimeout(`${TOMTOM_ROUTER}?apiVersion=3`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "TomTom-Api-Version": "3",
+      "TomTom-Api-Key": String(env.TOMTOM_API_KEY),
+      Attributes: "routes",
+    },
+    body: JSON.stringify({
+      routePlanningLocations: {
+        origin: { type: "Point", coordinates: [origin.lon, origin.lat] },
+        destination: { type: "Point", coordinates: [destination.lon, destination.lat] },
+      },
+      departureDateTime: "now",
+      travelMode: "car",
+      routeType: "fast",
+      traffic: "live",
+      maxPathAlternativeRoutes: 0,
+    }),
+  }, 10000);
+
+  if (!response.ok) throw new MapsError(502, `Live traffic provider returned ${response.status}.`);
+  const payload = await response.json();
+  const route = Array.isArray(payload?.routes) ? payload.routes[0] : null;
+  const summary = route?.summary;
+  const seconds = Number(summary?.travelDurationInSeconds);
+  const distanceMeters = Number(summary?.lengthInMeters);
+  if (!route || !Number.isFinite(seconds) || seconds <= 0) {
+    throw new MapsError(502, "The live traffic provider did not return a usable travel time.");
+  }
+
+  const coordinates = [];
+  for (const leg of Array.isArray(route.legs) ? route.legs : []) {
+    const legCoordinates = leg?.path?.coordinates;
+    if (!Array.isArray(legCoordinates)) continue;
+    for (const coordinate of legCoordinates) {
+      if (!Array.isArray(coordinate) || coordinate.length < 2) continue;
+      const normalized = [Number(coordinate[0]), Number(coordinate[1])];
+      const previous = coordinates[coordinates.length - 1];
+      if (!previous || previous[0] !== normalized[0] || previous[1] !== normalized[1]) coordinates.push(normalized);
+    }
+  }
+
+  const result = {
+    seconds,
+    distanceKm: Number.isFinite(distanceMeters) ? distanceMeters / 1000 : 0,
+    geometry: coordinates.length >= 2 ? { type: "LineString", coordinates } : null,
+    trafficAware: true,
+    trafficDelaySeconds: Math.max(0, Number(summary?.trafficDelayDurationInSeconds || 0)),
+    trafficLengthKm: Math.max(0, Number(summary?.trafficLengthInMeters || 0) / 1000),
+    provider: "TomTom live traffic",
+  };
+
+  await writeCache(env.DB, key, result, 5 * 60);
+  return { ...result, cached: false, tomtomUsage: budget.count };
+}
+
+async function routeValhalla(origin, destination, mode, env) {
+  const rounded = (value) => Number(value).toFixed(4);
+  const key = [
+    "route:valhalla:v2",
     mode,
     rounded(origin.lat),
     rounded(origin.lon),
@@ -157,6 +268,10 @@ async function routeBetween(origin, destination, mode, env) {
     geometry: typeof shape === "string" && shape
       ? { type: "LineString", coordinates: decodePolyline6(shape) }
       : null,
+    trafficAware: false,
+    trafficDelaySeconds: 0,
+    trafficLengthKm: 0,
+    provider: env.MAPS_ROUTER_URL ? "custom" : "Valhalla",
   };
 
   await writeCache(env.DB, key, result, 15 * 60);
@@ -199,19 +314,52 @@ function decodeChunk(encoded, start) {
 
 async function ensureSchema(db) {
   if (!schemaPromise) {
-    schemaPromise = db.prepare(`
-      CREATE TABLE IF NOT EXISTS ${CACHE_TABLE} (
-        cache_key TEXT PRIMARY KEY,
-        payload TEXT NOT NULL,
-        expires_at INTEGER NOT NULL,
-        created_at INTEGER NOT NULL
-      )
-    `).run().catch((error) => {
+    schemaPromise = (async () => {
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS ${CACHE_TABLE} (
+          cache_key TEXT PRIMARY KEY,
+          payload TEXT NOT NULL,
+          expires_at INTEGER NOT NULL,
+          created_at INTEGER NOT NULL
+        )
+      `).run();
+      await db.prepare(`
+        CREATE TABLE IF NOT EXISTS ${USAGE_TABLE} (
+          provider TEXT NOT NULL,
+          month_key TEXT NOT NULL,
+          request_count INTEGER NOT NULL DEFAULT 0,
+          updated_at INTEGER NOT NULL,
+          PRIMARY KEY (provider, month_key)
+        )
+      `).run();
+    })().catch((error) => {
       schemaPromise = null;
       throw error;
     });
   }
   await schemaPromise;
+}
+
+function monthKey() {
+  return new Date().toISOString().slice(0, 7);
+}
+
+async function readTomTomUsage(db) {
+  const row = await db.prepare(`SELECT request_count FROM ${USAGE_TABLE} WHERE provider = 'tomtom' AND month_key = ?1 LIMIT 1`)
+    .bind(monthKey()).first();
+  return Math.max(0, Number(row?.request_count || 0));
+}
+
+async function consumeTomTomRequestBudget(db) {
+  const current = await readTomTomUsage(db);
+  if (current >= TOMTOM_FREE_HARD_CAP) return { allowed: false, count: current };
+  const now = Math.floor(Date.now() / 1000);
+  await db.prepare(`
+    INSERT INTO ${USAGE_TABLE} (provider, month_key, request_count, updated_at)
+    VALUES ('tomtom', ?1, 1, ?2)
+    ON CONFLICT(provider, month_key) DO UPDATE SET request_count = request_count + 1, updated_at = excluded.updated_at
+  `).bind(monthKey(), now).run();
+  return { allowed: true, count: current + 1 };
 }
 
 async function readCache(db, key) {
