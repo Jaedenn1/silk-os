@@ -1,0 +1,198 @@
+/* SILK Quiet Futurism — shared visual system
+   Overview is the reference. This layer retires the legacy cyan-heavy shell
+   without changing the newer Home V2 / Today V2 component palettes. */
+
+:root{
+  --ink:#f5f3fb;
+  --muted:#9995a6;
+  --muted2:#696675;
+  --line:rgba(188,181,218,.12);
+  --cyan:#a58fff;
+  --mint:#8fe0b5;
+  --violet:#9690ff;
+  --danger:#ff8090;
+  --warning:#ffb86a;
+  --bg:#07090d;
+}
+
+html,body{background:#07090d;color:var(--ink)}
+button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-visible{outline-color:#a58fff}
+
+.silk-shell{
+  background:
+    radial-gradient(circle at 78% 3%,rgba(139,105,255,.09),transparent 31%),
+    radial-gradient(circle at 18% 12%,rgba(70,111,255,.055),transparent 28%),
+    linear-gradient(180deg,#090b11 0%,#07090d 50%,#05070a 100%);
+}
+.silk-shell:before{
+  opacity:.32;
+  background-image:
+    linear-gradient(rgba(255,255,255,.014) 1px,transparent 1px),
+    linear-gradient(90deg,rgba(255,255,255,.012) 1px,transparent 1px);
+  background-size:44px 44px;
+  mask-image:linear-gradient(to bottom,rgba(0,0,0,.68),transparent 78%);
+}
+
+.silk-sidebar,.core-rail{
+  background:linear-gradient(180deg,rgba(11,12,18,.95),rgba(7,8,12,.96));
+  backdrop-filter:blur(24px);
+}
+.silk-sidebar{border-right:1px solid rgba(188,181,218,.11);box-shadow:18px 0 70px rgba(0,0,0,.2),inset -1px 0 rgba(185,174,231,.018)}
+.core-rail{border-left:1px solid rgba(188,181,218,.1);box-shadow:-18px 0 70px rgba(0,0,0,.18)}
+.brand-block{border-bottom-color:rgba(255,255,255,.055)}
+.brand-block span{color:#777482}
+.silk-mark{background:radial-gradient(circle,rgba(141,125,255,.2),rgba(18,18,29,.12) 58%,transparent 60%)}
+.silk-mark span{background:linear-gradient(90deg,transparent,#a58fff,transparent);box-shadow:0 0 12px rgba(165,143,255,.5)}
+.side-nav button{color:#7d7988}
+.side-nav button:hover{color:#e7e3ef;background:rgba(159,144,255,.045)}
+.side-nav button.active{color:#c8bdff;background:linear-gradient(90deg,rgba(137,119,235,.12),rgba(137,119,235,.025))}
+.side-nav button>i{background:#a58fff;box-shadow:0 0 10px rgba(165,143,255,.48)}
+.sidebar-foot{border-top-color:rgba(255,255,255,.055);color:#615e6b}
+.security-chip{border-color:rgba(143,224,181,.14);background:rgba(143,224,181,.035);color:#9adfba}
+
+.topbar{
+  border-bottom-color:rgba(188,181,218,.09);
+  background:rgba(9,10,15,.66);
+  box-shadow:0 16px 50px rgba(0,0,0,.16);
+}
+.topbar-title h1{color:#eceaf2}
+.eyebrow{color:#9d8dff}
+.icon-button,.quiet-button,.text-button{border-color:rgba(188,181,218,.12);background:rgba(255,255,255,.018);color:#928e9e}
+.icon-button:hover,.quiet-button:hover{border-color:rgba(171,157,238,.22);background:rgba(151,135,234,.04);color:#dcd7ea}
+.text-button{color:#a89dff}
+.preview-badge{color:#ffc98d;border-color:rgba(255,184,106,.2);background:rgba(255,184,106,.055)}
+.notice{border-color:rgba(255,184,106,.2);background:rgba(255,145,65,.055);color:#f2d5b7}
+.workspace-scroll{scrollbar-color:rgba(151,137,255,.26) transparent}
+
+.panel,.metric-card,.sync-banner,.memory-toolbar{
+  border-color:rgba(188,181,218,.11);
+  background:linear-gradient(145deg,rgba(16,16,24,.88),rgba(9,9,14,.91));
+  box-shadow:inset 0 1px rgba(255,255,255,.026),0 18px 54px rgba(0,0,0,.18);
+}
+.panel:before,.metric-card:before,.memory-toolbar:before{background:linear-gradient(118deg,rgba(255,255,255,.026),transparent 24%,transparent 77%,rgba(131,117,255,.018))}
+.panel:hover,.metric-card:hover{border-color:rgba(199,185,241,.18);box-shadow:inset 0 1px rgba(255,255,255,.035),0 24px 64px rgba(0,0,0,.24)}
+.panel-head h2,.memory-toolbar h2{color:#e9e6ef}
+.panel-copy{color:#8e8a99}
+.metric-card>span{color:#817d8c}.metric-card>strong{color:#e8e5ef}.metric-card>small{color:#65616f}
+.progress{background:rgba(165,143,255,.075)}
+.progress i{background:linear-gradient(90deg,#777dff,#a58fff 55%,#75a9ff);box-shadow:0 0 8px rgba(142,132,255,.25)}
+
+.timeline-item,.project-mini,.project-card,.integration-card,.approval-card,.connection-hero,.model-stack article,.memory-row{
+  border-color:rgba(188,181,218,.085);
+  background:rgba(255,255,255,.012);
+}
+.timeline-item:hover,.project-card:hover,.integration-card:hover,.memory-row:hover{border-color:rgba(188,173,237,.16);background:rgba(151,136,234,.018)}
+.timeline-item strong,.project-card h3,.project-mini h3{color:#d9d5e1}
+.task-check{border-color:rgba(143,224,181,.14);background:rgba(143,224,181,.025);color:#8fdcad}
+.recommendation-card{border-left-color:#ffad61;background:linear-gradient(90deg,rgba(255,145,65,.07),rgba(255,145,65,.012))}
+.recommendation-card svg{color:#ffb86a}.recommendation-card p{color:#b89e86}
+.project-mini>div:first-child,.signal,.sync-banner{color:#a89dff}
+.signal strong{color:#cbc7d3}.sync-banner{border-color:rgba(174,159,238,.13)}
+
+/* Ask SILK */
+.chat-thread{max-width:1040px}
+.chat-intro{border-bottom-color:rgba(255,255,255,.055)}
+.chat-intro h2{color:#eeebf3;letter-spacing:-.03em}
+.chat-intro p{color:#888493}
+.chat-message.assistant .message-label{color:#9d8dff}
+.message-label{color:#625f6c}
+.message-bubble{
+  border-color:rgba(188,181,218,.105);
+  background:linear-gradient(145deg,rgba(16,16,24,.82),rgba(10,10,16,.86));
+  color:#c9c5d0;
+  box-shadow:inset 0 1px rgba(255,255,255,.02),0 10px 32px rgba(0,0,0,.1);
+  border-radius:7px 16px 16px;
+}
+.chat-message.user .message-bubble{
+  color:#e4e0f0;
+  background:linear-gradient(145deg,rgba(78,73,155,.34),rgba(42,42,88,.42));
+  border-color:rgba(166,151,255,.17);
+  border-radius:16px 7px 16px 16px;
+  box-shadow:inset 0 1px rgba(255,255,255,.03),0 12px 34px rgba(0,0,0,.14);
+}
+.typing-line{color:#777381}.typing-line i{background:#a58fff;box-shadow:0 0 8px rgba(165,143,255,.45)}
+.composer-footer{background:linear-gradient(transparent,#07090d 34%)}
+.composer-root{
+  border-color:rgba(188,181,218,.18);
+  background:linear-gradient(180deg,rgba(22,22,31,.94),rgba(12,12,18,.97));
+  box-shadow:0 16px 48px rgba(0,0,0,.25),inset 0 1px rgba(255,255,255,.035);
+}
+.composer-input{color:#f1eef7}.composer-input::placeholder{color:#716d7c}
+.composer-send{background:linear-gradient(145deg,rgba(111,105,226,.94),rgba(73,70,161,.96));color:#fff;box-shadow:0 10px 24px rgba(72,68,168,.22),inset 0 1px rgba(255,255,255,.12)}
+.composer-footer>small{color:#5e5b67}
+
+/* Inputs, buttons, forms */
+.inline-add input,.graph-search input,.field-label select,.field-label input,.section-picker select,.modal-panel input,.modal-panel textarea,.modal-panel select,.login-panel input{
+  border-color:rgba(188,181,218,.12);
+  background:rgba(4,5,9,.46);
+  color:#f0edf5;
+}
+.inline-add input:focus,.graph-search input:focus,.field-label select:focus,.field-label input:focus,.section-picker select:focus,.modal-panel input:focus,.modal-panel textarea:focus,.modal-panel select:focus,.login-panel input:focus{border-color:rgba(165,143,255,.35)}
+.inline-add button,.graph-search button{border-color:rgba(165,143,255,.18);background:rgba(137,119,235,.07);color:#b2a5ff}
+.primary-button{background:linear-gradient(145deg,#7876d9,#6764b8);color:#fff;box-shadow:0 10px 26px rgba(80,76,174,.18),inset 0 1px rgba(255,255,255,.1)}
+.connection-icon{border-color:rgba(165,143,255,.14);background:rgba(137,119,235,.05);color:#a89dff}
+.rule svg{color:#8fe0b5}
+
+/* Projects / Study / Workouts */
+.project-card header{color:#9e96d7}
+.project-card em{color:#666270}
+.hero-stat{color:#a89dff}.hero-stat strong{color:#efecf5}.hero-stat span{color:#888493}
+.score-row{color:#8b8796;border-bottom-color:rgba(255,255,255,.05)}.score-row strong{color:#ffb86a}
+.pipeline span,.feature-pills span{border-color:rgba(188,181,218,.1);background:rgba(255,255,255,.012);color:#8a8695}
+.pipeline svg{color:#9d8dff}
+.workout-command{border-color:rgba(188,181,218,.11);background:rgba(255,255,255,.01);color:#8d8997}
+
+/* Memory */
+.segmented{border-color:rgba(188,181,218,.11);background:rgba(255,255,255,.008)}
+.segmented button{color:#7e7a89}.segmented button.active{background:rgba(137,119,235,.095);color:#b4a9ff}
+.memory-row>i{background:#a58fff;box-shadow:0 0 7px rgba(165,143,255,.45)}
+.memory-row>i.sensitive{background:#ffb86a}.memory-row>i.restricted{background:#ff8090}.memory-row>i.public{background:#8fe0b5}
+.memory-row header span{color:#a99dff}.memory-row p{color:#aaa6b2}
+.row-actions button{border-color:rgba(188,181,218,.1);color:#817d8c;background:rgba(255,255,255,.008)}
+.graph-search{color:#a89dff}
+.memory-graph{border-color:rgba(188,181,218,.1);background:radial-gradient(circle at 50% 38%,rgba(126,109,255,.065),transparent 50%),rgba(4,5,9,.38)}
+.graph-edge{stroke:rgba(157,143,225,.22)}
+.graph-node circle{fill:rgba(116,107,219,.8);stroke:#aaa0ff}.graph-node.category circle{fill:rgba(128,117,224,.78);stroke:#c2baff}.graph-node text{fill:#8b8797}
+
+/* Connections / models / approvals / Activity */
+.integration-card{background:linear-gradient(145deg,rgba(16,16,24,.72),rgba(9,9,14,.74));box-shadow:0 12px 30px rgba(0,0,0,.14)}
+.integration-card.is-connected{border-color:rgba(143,224,181,.14)}
+.model-stack span{color:#a89dff}.model-stack strong{color:#d4d0dc}.model-stack small,.usage-lines small{color:#64616d}
+.approval-card{background:rgba(255,255,255,.01)}
+.approval-icon{background:rgba(255,184,106,.055);color:#ffbd79}
+.activity-feed article{border-bottom-color:rgba(255,255,255,.05)}
+.activity-feed article>i{background:#a58fff;box-shadow:0 0 8px rgba(165,143,255,.45)}
+.activity-feed article>i.failed{background:#ff8090}.activity-feed article>i.pending{background:#ffb86a}
+.future-hero{border-left-color:#9690ff;background:linear-gradient(90deg,rgba(150,144,255,.055),transparent)}
+.agent-blueprints article{border-color:rgba(188,181,218,.1);background:rgba(255,255,255,.01);color:#9d8dff}
+
+/* Modals and authentication */
+.modal-backdrop{background:rgba(2,3,6,.8)}
+.modal-panel{
+  border-color:rgba(188,181,218,.16);
+  background:linear-gradient(145deg,#111119,#0a0a10);
+  box-shadow:0 36px 120px rgba(0,0,0,.55),inset 0 1px rgba(255,255,255,.035);
+}
+.boot-screen,.login-screen{background:radial-gradient(circle at 55% 36%,rgba(130,109,255,.11),transparent 34%),linear-gradient(180deg,#090b11,#05070a)}
+.login-panel{
+  border-color:rgba(188,181,218,.16);
+  background:linear-gradient(145deg,rgba(17,17,25,.96),rgba(9,9,14,.97));
+  box-shadow:0 36px 110px rgba(0,0,0,.4),inset 0 1px rgba(255,255,255,.035);
+}
+.login-panel h1{color:#f1eef7}.login-panel>p{color:#8f8b99}
+
+/* Legacy Core rail fallback only; the WebGL Core keeps its own blue-violet palette. */
+.core-orb:before{background:radial-gradient(circle,rgba(135,115,255,.12),rgba(95,86,190,.018) 47%,transparent 70%)}
+.ring{border-color:rgba(171,157,238,.16);box-shadow:0 0 18px rgba(126,109,224,.04)}
+.ring:after{border-top-color:#a58fff}.core-center{border-color:rgba(165,143,255,.22);background:rgba(10,10,16,.9);box-shadow:0 0 35px rgba(130,111,236,.1)}
+.core-activity span{color:#a58fff}.core-activity strong{color:#b9b5c3}
+.core-models,.core-models>div{border-color:rgba(255,255,255,.05)}
+.core-note{border-color:rgba(188,181,218,.09);background:rgba(255,255,255,.008)}
+
+/* Mobile */
+.mobile-tabs{border-top-color:rgba(188,181,218,.1);background:rgba(8,9,14,.96)}
+.mobile-tabs button{color:#6d6978}.mobile-tabs button.active{color:#b1a4ff}
+
+/* Preserve semantic color discipline. */
+.connected-chip,.online-chip{color:#8fe0b5;border-color:rgba(143,224,181,.15);background:rgba(143,224,181,.035)}
+.field-error{color:#f2a0aa}
