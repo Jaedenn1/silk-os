@@ -161,16 +161,19 @@ async function handleRead(message, request, env) {
 
   if (/\bdo i have time\b|\bfree time\b|\bopen (?:time|window)\b|\bfree window\b/i.test(message)) {
     const duration = requestedDurationMinutes(message);
-    const windows = findFreeWindows(events, scope.start, duration);
+    const availabilityDate = dateKey || localDateKey(Date.now());
+    const availabilityLabel = dateKey ? scope.label : "today";
+    const availabilityEvents = all.filter((event) => localDateKey(Number(event.start_at) * 1000) === availabilityDate);
+    const windows = findFreeWindows(availabilityEvents, availabilityDate, duration);
     const purpose = /\b(?:gym|workout|training)\b/i.test(message) ? "for the gym" : "free";
     if (!windows.length) {
-      return calendarPayload(`I don’t see a ${duration}-minute usable window ${scope.label} ${purpose === "free" ? "" : purpose} once Calendar blocks and basic prep/travel buffers are included.`.replace(/\s+/g, " "), "silk_calendar_availability");
+      return calendarPayload(`I don’t see a ${duration}-minute usable window ${availabilityLabel} ${purpose === "free" ? "" : purpose} once Calendar blocks and basic prep/travel buffers are included.`.replace(/\s+/g, " "), "silk_calendar_availability");
     }
     const shown = windows.slice(0, 3).map((window) => `${formatClock(window.start)}–${formatClock(window.end)} (${window.minutes} min)`).join("; ");
     return {
-      ...calendarPayload(`Yes. ${scope.label[0].toUpperCase()}${scope.label.slice(1)} you have ${shown}${purpose === "free" ? "" : ` ${purpose}`}.`, "silk_calendar_availability"),
+      ...calendarPayload(`Yes. ${availabilityLabel[0].toUpperCase()}${availabilityLabel.slice(1)} you have ${shown}${purpose === "free" ? "" : ` ${purpose}`}.`, "silk_calendar_availability"),
       free_windows: windows,
-      calendar_events: events,
+      calendar_events: availabilityEvents,
     };
   }
 

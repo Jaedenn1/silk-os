@@ -300,15 +300,15 @@ export default function TodayV2Bridge() {
         from: bounds.startDate.toISOString(),
         to: bounds.tomorrowNoon.toISOString(),
       });
-      const [bootstrapResponse, calendarResponse, pendingResponse, completionResponse] = await Promise.all([
-        fetch("/api/bootstrap", { credentials: "same-origin" }),
+      const bootstrapResponse = await fetch("/api/bootstrap", { credentials: "same-origin" });
+      if (!bootstrapResponse.ok) throw new Error("Today could not load your SILK data.");
+      setData((await bootstrapResponse.json()) as TodayData);
+
+      const [calendarResponse, pendingResponse, completionResponse] = await Promise.all([
         fetch(`/api/silk-calendar/events?${query}`, { credentials: "same-origin" }),
         fetch("/api/completions/pending", { credentials: "same-origin" }),
         fetch("/api/completions/summary", { credentials: "same-origin" }),
       ]);
-
-      if (!bootstrapResponse.ok) throw new Error("Today could not load your SILK data.");
-      setData((await bootstrapResponse.json()) as TodayData);
 
       if (calendarResponse.ok) {
         const payload = (await calendarResponse.json().catch(() => ({}))) as { events?: CalendarEvent[] };
