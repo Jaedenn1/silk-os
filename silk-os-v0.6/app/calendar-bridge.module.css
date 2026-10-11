@@ -105,3 +105,28 @@
     width: calc(100vw - 24px);
   }
 }
+
+/* SILK Quiet Futurism — floating completion check-in */
+.checkin {
+  border-color: rgba(188,181,218,.18);
+  color: #f5f3fb;
+  background:
+    radial-gradient(circle at 90% -20%, rgba(139,105,255,.12), transparent 45%),
+    linear-gradient(145deg, rgba(18,18,27,.98), rgba(10,10,16,.98));
+  box-shadow: 0 24px 80px rgba(0,0,0,.52), inset 0 1px rgba(255,255,255,.035);
+}
+.eyebrow { color: #9d8dff; }
+.pulse { background: #8fe0b5; box-shadow: 0 0 16px rgba(143,224,181,.65); }
+.checkin p { color: #908c9b; }
+.no {
+  color: #c7c3ce;
+  background: rgba(255,255,255,.018);
+  border-color: rgba(188,181,218,.11);
+}
+.yes {
+  color: #07110c;
+  background: #8fdcaf;
+  border-color: #8fdcaf;
+}
+.footer span { color: #666270; }
+.footer a { color: #aa9eff; }

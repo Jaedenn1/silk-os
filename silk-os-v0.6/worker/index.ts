@@ -219,10 +219,10 @@ function connectionSetupResponse(request: Request, url: URL, env: Env): Response
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>${escapeHtml(name)} setup · SILK</title>
   <style>
-    :root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#030a0f;color:#eaf8ff}
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 70% 0,rgba(42,190,225,.13),transparent 35%),#030a0f}
-    main{width:min(680px,100%);border:1px solid rgba(114,231,255,.18);border-radius:18px;padding:28px;background:rgba(7,22,30,.94);box-shadow:0 28px 90px rgba(0,0,0,.4)}
-    .eyebrow{font:700 11px ui-monospace,monospace;letter-spacing:.18em;color:#72e7ff}h1{margin:10px 0 8px;font-size:28px}p{color:#91aab6;line-height:1.65}ol{padding-left:24px;color:#cfe7ef}li{margin:9px 0}code{color:#72ffd4;background:rgba(114,255,212,.06);border:1px solid rgba(114,255,212,.12);border-radius:7px;padding:3px 6px}.callback{display:block;overflow-wrap:anywhere;margin:10px 0 20px;padding:12px;border:1px solid rgba(114,231,255,.12);border-radius:9px;background:#02070a;color:#bcefff}a{display:inline-flex;text-decoration:none;color:#031014;background:#72e7ff;border-radius:9px;padding:10px 14px;font-weight:700}.note{font-size:12px;color:#6f8a97}
+    :root{color-scheme:dark;font-family:Inter,system-ui,sans-serif;background:#07090d;color:#f5f3fb}
+    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:24px;background:radial-gradient(circle at 70% 0,rgba(139,105,255,.11),transparent 35%),#07090d}
+    main{width:min(680px,100%);border:1px solid rgba(188,181,218,.16);border-radius:18px;padding:28px;background:rgba(16,16,24,.96);box-shadow:0 28px 90px rgba(0,0,0,.4)}
+    .eyebrow{font:700 11px ui-monospace,monospace;letter-spacing:.18em;color:#9d8dff}h1{margin:10px 0 8px;font-size:28px}p{color:#9995a6;line-height:1.65}ol{padding-left:24px;color:#c9c5d0}li{margin:9px 0}code{color:#72ffd4;background:rgba(114,255,212,.06);border:1px solid rgba(114,255,212,.12);border-radius:7px;padding:3px 6px}.callback{display:block;overflow-wrap:anywhere;margin:10px 0 20px;padding:12px;border:1px solid rgba(188,181,218,.12);border-radius:9px;background:#08080d;color:#d9d5e4}a{display:inline-flex;text-decoration:none;color:#fff;background:#7774d8;border-radius:9px;padding:10px 14px;font-weight:700}.note{font-size:12px;color:#6f8a97}
   </style>
 </head>
 <body>
