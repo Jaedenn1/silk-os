@@ -12,6 +12,8 @@ import {
   Dumbbell,
   FolderKanban,
   ListChecks,
+  MapPin,
+  Navigation,
   Plus,
   RefreshCw,
   ShieldCheck,
@@ -19,6 +21,7 @@ import {
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
+import SilkRouteMap from "./components/silk-route-map";
 import styles from "./today-v2.module.css";
 
 type DailyItem = {
@@ -101,6 +104,18 @@ type Need = {
 type FreeWindow = { start: number; end: number; minutes: number };
 type Conflict = { key: string; title: string; meta: string; tone: "hard" | "buffer" };
 type SleepSignal = { event: CalendarEvent; wakeAt: number; bedtime: number; windDown: number };
+type RouteEstimate = {
+  eventId: number;
+  origin: { lat: number; lon: number };
+  destination: { lat: number; lon: number; label: string; query: string };
+  travel_minutes: number;
+  travel_seconds: number;
+  distance_km: number;
+  geometry: { type: "LineString"; coordinates: number[][] } | null;
+  map_style_url: string;
+  cached: boolean;
+  estimate: boolean;
+};
 
 const DEFAULT_PREP: Record<string, number> = {
   work: 30,
@@ -177,19 +192,20 @@ function noteMinutes(notes: string | undefined, key: "prep" | "travel") {
   return Number.isFinite(value) && value >= 0 && value <= 240 ? value : null;
 }
 
-function planEvent(event: CalendarEvent): EventPlan | null {
+function planEvent(event: CalendarEvent, liveRoute?: RouteEstimate | null): EventPlan | null {
   if (event.all_day || !event.start_at) return null;
   const prepOverride = noteMinutes(event.notes, "prep");
   const travelOverride = noteMinutes(event.notes, "travel");
+  const liveTravel = liveRoute?.eventId === event.id ? liveRoute.travel_minutes : null;
   const prepMinutes = prepOverride ?? DEFAULT_PREP[event.category] ?? 10;
-  const travelMinutes = travelOverride ?? (event.location.trim() ? 30 : 0);
+  const travelMinutes = travelOverride ?? liveTravel ?? (event.location.trim() ? 30 : 0);
   const leaveBy = event.start_at - travelMinutes * 60;
   return {
     prepMinutes,
     travelMinutes,
     leaveBy,
     prepStart: leaveBy - prepMinutes * 60,
-    estimatedTravel: travelOverride === null && travelMinutes > 0,
+    estimatedTravel: travelOverride === null && liveTravel === null && travelMinutes > 0,
   };
 }
 
@@ -203,6 +219,8 @@ export default function TodayV2Bridge() {
   const [saving, setSaving] = useState(false);
   const [newTask, setNewTask] = useState("");
   const [error, setError] = useState("");
+  const [routeEstimate, setRouteEstimate] = useState<RouteEstimate | null>(null);
+  const [routeBusy, setRouteBusy] = useState(false);
   const [, setTick] = useState(0);
 
   const syncShell = useCallback(() => {
@@ -311,7 +329,7 @@ export default function TodayV2Bridge() {
         ? event.completion_status === "completed"
         : event.end_at < Date.now() / 1000,
       calendarEvent: event,
-      plan: planEvent(event),
+      plan: planEvent(event, routeEstimate),
     }));
 
     const taskEntries: TimelineEntry[] = (data?.today.items || [])
@@ -332,7 +350,7 @@ export default function TodayV2Bridge() {
       if (a.start !== null && b.start === null) return 1;
       return Number(a.start || 0) - Number(b.start || 0);
     });
-  }, [data, todayEvents]);
+  }, [data, routeEstimate, todayEvents]);
 
   const conflicts = useMemo<Conflict[]>(() => {
     const timed = timeline
@@ -498,6 +516,15 @@ export default function TodayV2Bridge() {
     return upcoming || null;
   }, [timeline]);
 
+  const routeTarget = useMemo(() => {
+    const now = Date.now() / 1000;
+    return [...todayEvents]
+      .filter((event) => !event.all_day && event.start_at > now && Boolean(event.location.trim()))
+      .sort((a, b) => a.start_at - b.start_at)[0] || null;
+  }, [todayEvents]);
+
+  const liveRoute = routeEstimate && routeTarget && routeEstimate.eventId === routeTarget.id ? routeEstimate : null;
+
   const bestFit = useMemo(() => {
     if (!freeWindows.length) return null;
     const tasks = [...(data?.today.items || [])]
@@ -611,6 +638,49 @@ export default function TodayV2Bridge() {
     }
   }, [data?.today.date, load, newTask, saving]);
 
+  const requestLiveRoute = useCallback(() => {
+    if (!routeTarget || routeBusy) return;
+    if (!navigator.geolocation) {
+      setError("This browser does not expose device location to SILK.");
+      return;
+    }
+
+    setRouteBusy(true);
+    setError("");
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        void (async () => {
+          try {
+            const response = await fetch("/api/maps/route", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                origin: { lat: position.coords.latitude, lon: position.coords.longitude },
+                destination: routeTarget.location,
+                mode: "auto",
+              }),
+            });
+            const payload = await response.json().catch(() => ({})) as Omit<RouteEstimate, "eventId"> & { error?: string };
+            if (!response.ok) throw new Error(payload.error || "SILK could not calculate that route.");
+            setRouteEstimate({ ...payload, eventId: routeTarget.id });
+          } catch (routeError) {
+            setError(routeError instanceof Error ? routeError.message : "SILK could not calculate that route.");
+          } finally {
+            setRouteBusy(false);
+          }
+        })();
+      },
+      (locationError) => {
+        setRouteBusy(false);
+        setError(locationError.code === 1
+          ? "Location permission was not granted. SILK will keep the fallback travel estimate."
+          : "SILK could not read your current location. The fallback travel estimate is still active.");
+      },
+      { enableHighAccuracy: false, timeout: 10_000, maximumAge: 5 * 60_000 },
+    );
+  }, [routeBusy, routeTarget]);
+
   const openView = useCallback((name: string) => findNavButton(name)?.click(), []);
 
   if (!target || !active || !data) return null;
@@ -704,7 +774,27 @@ export default function TodayV2Bridge() {
               <span>Sleep protection</span><strong>Wind down {clock(sleepSignal.windDown)}</strong><small>Aim asleep by {clock(sleepSignal.bedtime)} · wake around {clock(sleepSignal.wakeAt)} for tomorrow’s {clock(sleepSignal.event.start_at)} {sleepSignal.event.title}. This uses an 8h sleep target plus a 1h wake buffer.</small>
             </div> : <div className={styles.engineRow}><span>Sleep protection</span><strong>No early trigger</strong><small>No timed commitment before 2 PM tomorrow is loaded.</small></div>}
           </div>
-          <p className={styles.estimateNote}>Travel defaults to 30 min when a Calendar event has a location. Add <code>travel:45</code> or <code>prep:20</code> to event notes to override the estimate until live routing is connected.</p>
+          <p className={styles.estimateNote}>Travel falls back to 30 min when a Calendar event has a location but no live route is active. Add <code>travel:45</code> or <code>prep:20</code> to event notes for an explicit override.</p>
+        </article>
+
+        <article className={`${styles.card} ${styles.routeCard}`}>
+          <div className={styles.cardHeading}><div><span>LIVE ROUTE</span><h2>Maps & travel time</h2></div><Navigation size={18} /></div>
+          {routeTarget ? liveRoute ? <div className={styles.routeLive}>
+            <SilkRouteMap origin={liveRoute.origin} destination={liveRoute.destination} geometry={liveRoute.geometry} styleUrl={liveRoute.map_style_url} />
+            <div className={styles.routeFacts}>
+              <div><span>Drive</span><strong>{liveRoute.travel_minutes} min</strong></div>
+              <div><span>Distance</span><strong>{liveRoute.distance_km.toFixed(1)} km</strong></div>
+              <div><span>Leave by</span><strong>{clock(routeTarget.start_at - liveRoute.travel_minutes * 60)}</strong></div>
+            </div>
+            <div className={styles.routeDestination}><MapPin size={13} /><div><strong>{routeTarget.title}</strong><small>{liveRoute.destination.label}</small></div></div>
+            <button className={styles.routeButton} onClick={requestLiveRoute} disabled={routeBusy}><Navigation size={14} /> {routeBusy ? "Routing…" : "Refresh from current location"}</button>
+            <small className={styles.routeAttribution}>OpenFreeMap · OpenStreetMap contributors · Photon · Valhalla</small>
+          </div> : <div className={styles.routePrompt}>
+            <span className={styles.routeIcon}><MapPin size={18} /></span>
+            <div><strong>{routeTarget.title}</strong><small>{routeTarget.location}</small></div>
+            <p>Use your device location to replace SILK’s fallback travel buffer with a real OpenStreetMap route. Your precise position is requested only when you press the button.</p>
+            <button className={styles.routeButton} onClick={requestLiveRoute} disabled={routeBusy}><Navigation size={14} /> {routeBusy ? "Calculating route…" : "Use current location"}</button>
+          </div> : <p className={styles.empty}>No upcoming timed Calendar event has a location to route to.</p>}
         </article>
 
         <article className={`${styles.card} ${styles.checkinCard}`}>

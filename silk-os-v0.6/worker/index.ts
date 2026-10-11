@@ -4,6 +4,7 @@ import handler from "vinext/server/app-router-entry";
 import silkCore from "./silk-core.js";
 import { handleSilkCalendar, calendarErrorResponse } from "./silk-calendar.js";
 import { tryHandleSilkCalendarChat } from "./silk-calendar-chat.js";
+import { handleSilkMaps, mapsErrorResponse } from "./silk-maps.js";
 import { classifyAutomaticChatTier, routeAutomaticModelEnv } from "./model-routing.js";
 
 interface Env {
@@ -18,6 +19,9 @@ interface Env {
   OPENAI_SPEND_LIMIT_USD?: string;
   PRIMARY_AI_PROVIDER?: string;
   TAVILY_API_KEY?: string;
+  MAPS_GEOCODER_URL?: string;
+  MAPS_ROUTER_URL?: string;
+  MAPS_TILE_STYLE_URL?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_REDIRECT_URI?: string;
@@ -71,6 +75,20 @@ const worker = {
         return withSecurityHeaders(await handleSilkCalendar(request, env));
       } catch (error) {
         return withSecurityHeaders(calendarErrorResponse(error));
+      }
+    }
+
+    if (url.pathname.startsWith("/api/maps/")) {
+      if (!(await ownerSessionIsAuthenticated(request, env, ctx))) {
+        return withSecurityHeaders(new Response(JSON.stringify({ error: "Unlock SILK before using maps." }), {
+          status: 401,
+          headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+        }));
+      }
+      try {
+        return withSecurityHeaders(await handleSilkMaps(request, env));
+      } catch (error) {
+        return withSecurityHeaders(mapsErrorResponse(error));
       }
     }
 
