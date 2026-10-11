@@ -284,7 +284,7 @@ function normalizeInput(body, current) {
   if (endAt - startAt > 31 * 86400) throw new CalendarError(400, "A single event cannot be longer than 31 days.");
 
   const category = CATEGORY_VALUES.has(String(merged.category || "")) ? String(merged.category) : "personal";
-  const requiresCompletion = category === "workout" || merged.requires_completion === true || merged.requires_completion === 1;
+  const requiresCompletion = ["workout", "study"].includes(category) || merged.requires_completion === true || merged.requires_completion === 1;
 
   let completionStatus = String(merged.completion_status || (requiresCompletion ? "pending" : "none"));
   if (!COMPLETION_VALUES.has(completionStatus)) completionStatus = requiresCompletion ? "pending" : "none";

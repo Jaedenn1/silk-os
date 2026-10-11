@@ -386,7 +386,9 @@ async function applyCompletion(db, pending, result, source) {
     title = clean(row.title, 240);
     category = "project";
     const dateKey = localDateKey(Date.now());
-    instanceKey = clean(pending.key, 300) || `project-task:${row.id}:${dateKey}`;
+    instanceKey = result === "completed"
+      ? `project-task:${row.id}`
+      : (clean(pending.key, 300) || `project-task:${row.id}:${dateKey}`);
     if (result === "completed") {
       await db.prepare(`UPDATE project_tasks SET status = 'done', completed_at = ?2, updated_at = ?2 WHERE id = ?1`).bind(Number(row.id), now).run();
     } else {

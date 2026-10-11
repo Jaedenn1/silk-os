@@ -134,8 +134,6 @@ async function handleUpdate(message, request, env) {
 async function handleRead(message, request, env) {
   const now = Math.floor(Date.now() / 1000);
   const all = await loadEvents(request, env, now - 2 * 86400, now + 22 * 86400);
-  const text = message.toLowerCase();
-
   if (/\bwhat(?:'s| is) next\b/i.test(message)) {
     const next = all.filter((event) => Number(event.end_at) >= now).sort((a, b) => Number(a.start_at) - Number(b.start_at))[0];
     if (!next) return calendarPayload("You don’t have another event on SILK Calendar in the next three weeks.", "silk_calendar_next");

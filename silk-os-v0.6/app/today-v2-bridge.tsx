@@ -124,6 +124,37 @@ type RouteEstimate = {
   estimate: boolean;
 };
 
+type PendingCheckin = {
+  key: string;
+  entity_type: "calendar_event" | "project_task" | "daily_item";
+  entity_id: string;
+  daily_item_id?: number | null;
+  title: string;
+  category: string;
+  ended_at: number;
+  meta: string;
+};
+
+type CompletionSummary = {
+  streaks: {
+    overall: { current: number; best: number };
+    workout: { current: number; best: number };
+    study: { current: number; best: number };
+    project: { current: number; best: number };
+  };
+  achievements: Array<{ id: string; title: string; description: string; unlocked: boolean; progress: number; target: number }>;
+  rates: {
+    seven_day: { completed: number; missed: number; total: number; percent: number | null };
+    thirty_day: { completed: number; missed: number; total: number; percent: number | null };
+  };
+  recommendation_signal: {
+    mode: "neutral" | "building" | "steady" | "reset";
+    completion_rate_7d: number | null;
+    missed_category: string | null;
+    current_streak: number;
+  };
+};
+
 const DEFAULT_PREP: Record<string, number> = {
   work: 30,
   school: 30,
@@ -221,7 +252,8 @@ export default function TodayV2Bridge() {
   const [active, setActive] = useState(false);
   const [data, setData] = useState<TodayData | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
-  const [pendingCheckins, setPendingCheckins] = useState<CalendarEvent[]>([]);
+  const [pendingCheckins, setPendingCheckins] = useState<PendingCheckin[]>([]);
+  const [completionSummary, setCompletionSummary] = useState<CompletionSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [newTask, setNewTask] = useState("");
@@ -268,10 +300,11 @@ export default function TodayV2Bridge() {
         from: bounds.startDate.toISOString(),
         to: bounds.tomorrowNoon.toISOString(),
       });
-      const [bootstrapResponse, calendarResponse, pendingResponse] = await Promise.all([
+      const [bootstrapResponse, calendarResponse, pendingResponse, completionResponse] = await Promise.all([
         fetch("/api/bootstrap", { credentials: "same-origin" }),
         fetch(`/api/silk-calendar/events?${query}`, { credentials: "same-origin" }),
-        fetch("/api/silk-calendar/pending", { credentials: "same-origin" }),
+        fetch("/api/completions/pending", { credentials: "same-origin" }),
+        fetch("/api/completions/summary", { credentials: "same-origin" }),
       ]);
 
       if (!bootstrapResponse.ok) throw new Error("Today could not load your SILK data.");
@@ -285,10 +318,16 @@ export default function TodayV2Bridge() {
       }
 
       if (pendingResponse.ok) {
-        const payload = (await pendingResponse.json().catch(() => ({}))) as { events?: CalendarEvent[] };
-        setPendingCheckins(Array.isArray(payload.events) ? payload.events : []);
+        const payload = (await pendingResponse.json().catch(() => ({}))) as { pending?: PendingCheckin[] };
+        setPendingCheckins(Array.isArray(payload.pending) ? payload.pending : []);
       } else {
         setPendingCheckins([]);
+      }
+
+      if (completionResponse.ok) {
+        setCompletionSummary((await completionResponse.json().catch(() => null)) as CompletionSummary | null);
+      } else {
+        setCompletionSummary(null);
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Today could not refresh.");
@@ -563,10 +602,19 @@ export default function TodayV2Bridge() {
     const urgent = needs.find((item) => item.tone === "urgent");
     if (urgent) return { title: urgent.title, meta: urgent.meta };
 
+    const completionSignal = completionSummary?.recommendation_signal;
+    if (completionSignal?.mode === "reset" && completionSignal.missed_category) {
+      const tone = completionSignal.missed_category === "workout" ? "fitness" : completionSignal.missed_category === "study" ? "study" : completionSignal.missed_category === "project" ? "project" : null;
+      const resetNeed = tone ? needs.find((item) => item.tone === tone) : null;
+      if (resetNeed) return { title: resetNeed.title, meta: `Your recent completion history says ${completionSignal.missed_category} needs a reset. Make this the next clean win.` };
+    }
+
     if (bestFit) {
       return {
         title: bestFit.task.title,
-        meta: `Fits inside your ${minutesLabel(bestFit.window.minutes)} window ending at ${clock(bestFit.window.end)}.`,
+        meta: completionSignal?.mode === "reset"
+          ? `Rebuild momentum with a finishable win. This fits inside your ${minutesLabel(bestFit.window.minutes)} window ending at ${clock(bestFit.window.end)}.`
+          : `Fits inside your ${minutesLabel(bestFit.window.minutes)} window ending at ${clock(bestFit.window.end)}.`,
       };
     }
 
@@ -580,7 +628,7 @@ export default function TodayV2Bridge() {
     if (project) return { title: project.title, meta: project.meta };
     if (nextEntry) return { title: nextEntry.item.title, meta: `Coming up ${nextEntry.status}.` };
     return { title: "Protect the open space", meta: "Nothing urgent is competing for your attention right now." };
-  }, [bestFit, conflicts, needs, nextEntry, nextLogistics, sleepSignal]);
+  }, [bestFit, completionSummary, conflicts, needs, nextEntry, nextLogistics, sleepSignal]);
 
   const toggleTask = useCallback(async (item: DailyItem) => {
     if (saving) return;
@@ -602,18 +650,20 @@ export default function TodayV2Bridge() {
     }
   }, [load, saving]);
 
-  const completeCalendar = useCallback(async (event: CalendarEvent, status: "completed" | "not_completed") => {
+  const respondCheckin = useCallback(async (checkin: PendingCheckin, result: "completed" | "not_completed") => {
     if (saving) return;
     setSaving(true);
     setError("");
     try {
-      const response = await fetch(`/api/silk-calendar/events/${event.id}`, {
-        method: "PATCH",
+      const response = await fetch("/api/completions/respond", {
+        method: "POST",
         credentials: "same-origin",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ completion_status: status }),
+        body: JSON.stringify({ ...checkin, result }),
       });
-      if (!response.ok) throw new Error("Could not save that check-in.");
+      const payload = await response.json().catch(() => ({})) as { error?: string; summary?: CompletionSummary };
+      if (!response.ok) throw new Error(payload.error || "Could not save that check-in.");
+      if (payload.summary) setCompletionSummary(payload.summary);
       await load();
     } catch (actionError) {
       setError(actionError instanceof Error ? actionError.message : "Could not save that check-in.");
@@ -808,11 +858,16 @@ export default function TodayV2Bridge() {
         <article className={`${styles.card} ${styles.checkinCard}`}>
           <div className={styles.cardHeading}><div><span>CHECK-INS</span><h2>Close the loop</h2></div><CheckCircle2 size={18} /></div>
           <div className={styles.checkinList}>
-            {pendingCheckins.slice(0, 3).map((event) => <div className={styles.checkin} key={event.id}>
-              <div><strong>{event.title}</strong><small>Ended {clock(event.end_at)} · did you complete it?</small></div>
-              <div className={styles.checkinActions}><button onClick={() => void completeCalendar(event, "completed")} disabled={saving}><Check size={12} /> Yes</button><button onClick={() => void completeCalendar(event, "not_completed")} disabled={saving}>No</button></div>
+            {pendingCheckins.slice(0, 4).map((checkin) => <div className={styles.checkin} key={checkin.key}>
+              <div><strong>{checkin.title}</strong><small>{checkin.meta} · did you complete it?</small></div>
+              <div className={styles.checkinActions}><button onClick={() => void respondCheckin(checkin, "completed")} disabled={saving}><Check size={12} /> Yes</button><button onClick={() => void respondCheckin(checkin, "not_completed")} disabled={saving}>No</button></div>
             </div>)}
             {!pendingCheckins.length && <p className={styles.empty}>No completion check-ins waiting.</p>}
+            {completionSummary && <div className={styles.completionPulse}>
+              <div><span>Current streak</span><strong>{completionSummary.streaks.overall.current} day{completionSummary.streaks.overall.current === 1 ? "" : "s"}</strong></div>
+              <div><span>7-day completion</span><strong>{completionSummary.rates.seven_day.percent == null ? "—" : `${completionSummary.rates.seven_day.percent}%`}</strong></div>
+              <div><span>Achievements</span><strong>{completionSummary.achievements.filter((item) => item.unlocked).length}/{completionSummary.achievements.length}</strong></div>
+            </div>}
           </div>
         </article>
 

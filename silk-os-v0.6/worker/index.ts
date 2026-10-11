@@ -5,6 +5,7 @@ import silkCore from "./silk-core.js";
 import { handleSilkCalendar, calendarErrorResponse } from "./silk-calendar.js";
 import { tryHandleSilkCalendarChat } from "./silk-calendar-chat.js";
 import { handleSilkMaps, mapsErrorResponse } from "./silk-maps.js";
+import { handleSilkCompletions, completionErrorResponse } from "./silk-completions.js";
 import { classifyAutomaticChatTier, routeAutomaticModelEnv } from "./model-routing.js";
 
 interface Env {
@@ -76,6 +77,20 @@ const worker = {
         return withSecurityHeaders(await handleSilkCalendar(request, env));
       } catch (error) {
         return withSecurityHeaders(calendarErrorResponse(error));
+      }
+    }
+
+    if (url.pathname.startsWith("/api/completions/")) {
+      if (!(await ownerSessionIsAuthenticated(request, env, ctx))) {
+        return withSecurityHeaders(new Response(JSON.stringify({ error: "Unlock SILK before using completion intelligence." }), {
+          status: 401,
+          headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+        }));
+      }
+      try {
+        return withSecurityHeaders(await handleSilkCompletions(request, env));
+      } catch (error) {
+        return withSecurityHeaders(completionErrorResponse(error));
       }
     }
 
