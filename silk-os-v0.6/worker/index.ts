@@ -22,6 +22,7 @@ interface Env {
   MAPS_GEOCODER_URL?: string;
   MAPS_ROUTER_URL?: string;
   MAPS_TILE_STYLE_URL?: string;
+  TOMTOM_API_KEY?: string;
   GOOGLE_CLIENT_ID?: string;
   GOOGLE_CLIENT_SECRET?: string;
   GOOGLE_REDIRECT_URI?: string;

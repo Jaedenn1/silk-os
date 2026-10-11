@@ -113,6 +113,13 @@ type RouteEstimate = {
   distance_km: number;
   geometry: { type: "LineString"; coordinates: number[][] } | null;
   map_style_url: string;
+  traffic: {
+    live: boolean;
+    delay_minutes: number;
+    delay_seconds: number;
+    affected_km: number;
+    provider: string | null;
+  };
   cached: boolean;
   estimate: boolean;
 };
@@ -778,21 +785,22 @@ export default function TodayV2Bridge() {
         </article>
 
         <article className={`${styles.card} ${styles.routeCard}`}>
-          <div className={styles.cardHeading}><div><span>LIVE ROUTE</span><h2>Maps & travel time</h2></div><Navigation size={18} /></div>
+          <div className={styles.cardHeading}><div><span>LIVE TRAFFIC</span><h2>Maps, traffic & travel time</h2></div><Navigation size={18} /></div>
           {routeTarget ? liveRoute ? <div className={styles.routeLive}>
             <SilkRouteMap origin={liveRoute.origin} destination={liveRoute.destination} geometry={liveRoute.geometry} styleUrl={liveRoute.map_style_url} />
             <div className={styles.routeFacts}>
               <div><span>Drive</span><strong>{liveRoute.travel_minutes} min</strong></div>
+              <div><span>Traffic delay</span><strong>{liveRoute.traffic.live ? `+${liveRoute.traffic.delay_minutes} min` : "Fallback"}</strong></div>
               <div><span>Distance</span><strong>{liveRoute.distance_km.toFixed(1)} km</strong></div>
               <div><span>Leave by</span><strong>{clock(routeTarget.start_at - liveRoute.travel_minutes * 60)}</strong></div>
             </div>
-            <div className={styles.routeDestination}><MapPin size={13} /><div><strong>{routeTarget.title}</strong><small>{liveRoute.destination.label}</small></div></div>
+            <div className={styles.routeDestination}><MapPin size={13} /><div><strong>{routeTarget.title}</strong><small>{liveRoute.destination.label} · {liveRoute.traffic.live ? `live traffic${liveRoute.traffic.affected_km ? ` · ${liveRoute.traffic.affected_km.toFixed(1)} km affected` : ""}` : "open-route fallback · no live flow"}</small></div></div>
             <button className={styles.routeButton} onClick={requestLiveRoute} disabled={routeBusy}><Navigation size={14} /> {routeBusy ? "Routing…" : "Refresh from current location"}</button>
-            <small className={styles.routeAttribution}>OpenFreeMap · OpenStreetMap contributors · Photon · Valhalla</small>
+            <small className={styles.routeAttribution}>{liveRoute.traffic.live ? "TomTom live traffic · " : ""}OpenFreeMap · OpenStreetMap contributors · Photon · Valhalla fallback</small>
           </div> : <div className={styles.routePrompt}>
             <span className={styles.routeIcon}><MapPin size={18} /></span>
             <div><strong>{routeTarget.title}</strong><small>{routeTarget.location}</small></div>
-            <p>Use your device location to replace SILK’s fallback travel buffer with a real OpenStreetMap route. Your precise position is requested only when you press the button.</p>
+            <p>Use your device location to calculate a real traffic-aware drive time. SILK uses its zero-cost traffic provider when configured and automatically falls back to the open route engine instead of spending money. Your precise position is requested only when you press the button.</p>
             <button className={styles.routeButton} onClick={requestLiveRoute} disabled={routeBusy}><Navigation size={14} /> {routeBusy ? "Calculating route…" : "Use current location"}</button>
           </div> : <p className={styles.empty}>No upcoming timed Calendar event has a location to route to.</p>}
         </article>
