@@ -39,7 +39,9 @@ type CalendarEvent = {
   end_at: number;
   all_day: boolean;
   location: string;
+  notes?: string;
   category: string;
+  requires_completion?: boolean;
   completion_status?: string;
 };
 
@@ -68,6 +70,14 @@ type TodayData = {
   approvals: Approval[];
 };
 
+type EventPlan = {
+  prepMinutes: number;
+  travelMinutes: number;
+  prepStart: number;
+  leaveBy: number;
+  estimatedTravel: boolean;
+};
+
 type TimelineEntry = {
   key: string;
   title: string;
@@ -77,6 +87,8 @@ type TimelineEntry = {
   meta: string;
   done: boolean;
   dailyItem?: DailyItem;
+  calendarEvent?: CalendarEvent;
+  plan?: EventPlan | null;
 };
 
 type Need = {
@@ -87,6 +99,18 @@ type Need = {
 };
 
 type FreeWindow = { start: number; end: number; minutes: number };
+type Conflict = { key: string; title: string; meta: string; tone: "hard" | "buffer" };
+type SleepSignal = { event: CalendarEvent; wakeAt: number; bedtime: number; windDown: number };
+
+const DEFAULT_PREP: Record<string, number> = {
+  work: 30,
+  school: 30,
+  study: 10,
+  workout: 15,
+  appointment: 20,
+  personal: 10,
+  other: 10,
+};
 
 function clock(epoch?: number | null) {
   if (!epoch) return "";
@@ -94,7 +118,7 @@ function clock(epoch?: number | null) {
 }
 
 function minutesLabel(value?: number) {
-  const minutes = Math.max(0, Number(value || 0));
+  const minutes = Math.max(0, Math.round(Number(value || 0)));
   if (!minutes) return "Flexible";
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
@@ -135,11 +159,37 @@ function dayBounds() {
   const now = new Date();
   const start = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const tomorrowNoon = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 14, 0);
   return {
     startDate: start,
     endDate: end,
+    tomorrowNoon,
     start: Math.floor(start.getTime() / 1000),
     end: Math.floor(end.getTime() / 1000),
+    tomorrowNoonEpoch: Math.floor(tomorrowNoon.getTime() / 1000),
+  };
+}
+
+function noteMinutes(notes: string | undefined, key: "prep" | "travel") {
+  const match = String(notes || "").match(new RegExp(`(?:^|\\s)${key}\\s*[:=]\\s*(\\d{1,3})(?:m|min|mins|minutes)?\\b`, "i"));
+  if (!match) return null;
+  const value = Number(match[1]);
+  return Number.isFinite(value) && value >= 0 && value <= 240 ? value : null;
+}
+
+function planEvent(event: CalendarEvent): EventPlan | null {
+  if (event.all_day || !event.start_at) return null;
+  const prepOverride = noteMinutes(event.notes, "prep");
+  const travelOverride = noteMinutes(event.notes, "travel");
+  const prepMinutes = prepOverride ?? DEFAULT_PREP[event.category] ?? 10;
+  const travelMinutes = travelOverride ?? (event.location.trim() ? 30 : 0);
+  const leaveBy = event.start_at - travelMinutes * 60;
+  return {
+    prepMinutes,
+    travelMinutes,
+    leaveBy,
+    prepStart: leaveBy - prepMinutes * 60,
+    estimatedTravel: travelOverride === null && travelMinutes > 0,
   };
 }
 
@@ -148,9 +198,11 @@ export default function TodayV2Bridge() {
   const [active, setActive] = useState(false);
   const [data, setData] = useState<TodayData | null>(null);
   const [events, setEvents] = useState<CalendarEvent[]>([]);
+  const [pendingCheckins, setPendingCheckins] = useState<CalendarEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [newTask, setNewTask] = useState("");
+  const [error, setError] = useState("");
   const [, setTick] = useState(0);
 
   const syncShell = useCallback(() => {
@@ -170,13 +222,14 @@ export default function TodayV2Bridge() {
   useEffect(() => {
     const shell = document.querySelector<HTMLElement>(".silk-shell");
     if (!shell) return;
-    shell.classList.toggle("today-v2-active", active);
+    shell.classList.toggle("today-v2-active", active && Boolean(data));
     return () => shell.classList.remove("today-v2-active");
-  }, [active]);
+  }, [active, data]);
 
   const load = useCallback(async () => {
     if (!active) return;
     setLoading(true);
+    setError("");
     try {
       const sessionResponse = await fetch("/api/session", { credentials: "same-origin" });
       const session = (await sessionResponse.json().catch(() => ({}))) as { configured?: boolean; authenticated?: boolean };
@@ -185,20 +238,32 @@ export default function TodayV2Bridge() {
       const bounds = dayBounds();
       const query = new URLSearchParams({
         from: bounds.startDate.toISOString(),
-        to: bounds.endDate.toISOString(),
+        to: bounds.tomorrowNoon.toISOString(),
       });
-      const [bootstrapResponse, calendarResponse] = await Promise.all([
+      const [bootstrapResponse, calendarResponse, pendingResponse] = await Promise.all([
         fetch("/api/bootstrap", { credentials: "same-origin" }),
         fetch(`/api/silk-calendar/events?${query}`, { credentials: "same-origin" }),
+        fetch("/api/silk-calendar/pending", { credentials: "same-origin" }),
       ]);
 
-      if (bootstrapResponse.ok) setData((await bootstrapResponse.json()) as TodayData);
+      if (!bootstrapResponse.ok) throw new Error("Today could not load your SILK data.");
+      setData((await bootstrapResponse.json()) as TodayData);
+
       if (calendarResponse.ok) {
         const payload = (await calendarResponse.json().catch(() => ({}))) as { events?: CalendarEvent[] };
         setEvents(Array.isArray(payload.events) ? payload.events : []);
       } else {
         setEvents([]);
       }
+
+      if (pendingResponse.ok) {
+        const payload = (await pendingResponse.json().catch(() => ({}))) as { events?: CalendarEvent[] };
+        setPendingCheckins(Array.isArray(payload.events) ? payload.events : []);
+      } else {
+        setPendingCheckins([]);
+      }
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : "Today could not refresh.");
     } finally {
       setLoading(false);
     }
@@ -217,15 +282,31 @@ export default function TodayV2Bridge() {
     return () => window.clearInterval(timer);
   }, [active, load]);
 
+  const todayEvents = useMemo(() => {
+    const bounds = dayBounds();
+    return events.filter((event) => event.start_at < bounds.end && event.end_at >= bounds.start);
+  }, [events]);
+
+  const tomorrowFirst = useMemo(() => {
+    const bounds = dayBounds();
+    return [...events]
+      .filter((event) => !event.all_day && event.start_at >= bounds.end && event.start_at < bounds.tomorrowNoonEpoch)
+      .sort((a, b) => a.start_at - b.start_at)[0] || null;
+  }, [events]);
+
   const timeline = useMemo<TimelineEntry[]>(() => {
-    const calendarEntries: TimelineEntry[] = events.map((event) => ({
+    const calendarEntries: TimelineEntry[] = todayEvents.map((event) => ({
       key: `calendar-${event.id}`,
       title: event.title,
       start: event.all_day ? null : event.start_at,
       end: event.all_day ? null : event.end_at,
       source: "calendar",
       meta: `${label(event.category || "Calendar")}${event.location ? ` · ${event.location}` : ""}`,
-      done: event.end_at < Date.now() / 1000,
+      done: event.requires_completion
+        ? event.completion_status === "completed"
+        : event.end_at < Date.now() / 1000,
+      calendarEvent: event,
+      plan: planEvent(event),
     }));
 
     const taskEntries: TimelineEntry[] = (data?.today.items || [])
@@ -246,7 +327,48 @@ export default function TodayV2Bridge() {
       if (a.start !== null && b.start === null) return 1;
       return Number(a.start || 0) - Number(b.start || 0);
     });
-  }, [data, events]);
+  }, [data, todayEvents]);
+
+  const conflicts = useMemo<Conflict[]>(() => {
+    const timed = timeline
+      .filter((item) => item.start !== null && item.end !== null)
+      .sort((a, b) => Number(a.start) - Number(b.start));
+    const result: Conflict[] = [];
+
+    for (let index = 1; index < timed.length; index += 1) {
+      const previous = timed[index - 1];
+      const current = timed[index];
+      if (Number(current.start) < Number(previous.end)) {
+        result.push({
+          key: `hard-${previous.key}-${current.key}`,
+          title: `${previous.title} overlaps ${current.title}`,
+          meta: `${clock(Number(current.start))} starts before the previous block ends at ${clock(Number(previous.end))}.`,
+          tone: "hard",
+        });
+        continue;
+      }
+
+      if (current.plan && current.plan.prepStart < Number(previous.end)) {
+        result.push({
+          key: `buffer-${previous.key}-${current.key}`,
+          title: `Not enough buffer before ${current.title}`,
+          meta: `Prep should begin at ${clock(current.plan.prepStart)}, but ${previous.title} runs until ${clock(Number(previous.end))}.`,
+          tone: "buffer",
+        });
+      }
+    }
+
+    return result.slice(0, 4);
+  }, [timeline]);
+
+  const sleepSignal = useMemo<SleepSignal | null>(() => {
+    if (!tomorrowFirst) return null;
+    const plan = planEvent(tomorrowFirst);
+    if (!plan) return null;
+    const wakeAt = plan.prepStart - 60 * 60;
+    const bedtime = wakeAt - 8 * 60 * 60;
+    return { event: tomorrowFirst, wakeAt, bedtime, windDown: bedtime - 30 * 60 };
+  }, [tomorrowFirst]);
 
   const needs = useMemo<Need[]>(() => {
     const items: Need[] = [];
@@ -312,15 +434,26 @@ export default function TodayV2Bridge() {
     return items.slice(0, 7);
   }, [data]);
 
+  const protectedIntervals = useMemo(() => {
+    return timeline
+      .filter((item) => item.start !== null && item.end !== null)
+      .map((item) => ({
+        start: Math.max(dayBounds().start, item.plan?.prepStart ?? Number(item.start)),
+        end: Number(item.end),
+      }));
+  }, [timeline]);
+
   const freeWindows = useMemo<FreeWindow[]>(() => {
     const bounds = dayBounds();
     const now = Math.max(Math.floor(Date.now() / 1000), bounds.start);
-    const dayFinish = Math.min(bounds.end, Math.floor(new Date(bounds.startDate.getFullYear(), bounds.startDate.getMonth(), bounds.startDate.getDate(), 23, 0).getTime() / 1000));
+    const defaultFinish = Math.floor(new Date(bounds.startDate.getFullYear(), bounds.startDate.getMonth(), bounds.startDate.getDate(), 23, 0).getTime() / 1000);
+    const sleepFinish = sleepSignal && sleepSignal.bedtime > now && sleepSignal.bedtime < bounds.end ? sleepSignal.bedtime : defaultFinish;
+    const dayFinish = Math.min(bounds.end, sleepFinish);
     if (now >= dayFinish) return [];
 
-    const intervals = timeline
-      .filter((item) => item.start !== null && item.end !== null && Number(item.end) > now)
-      .map((item) => ({ start: Math.max(now, Number(item.start)), end: Math.min(dayFinish, Number(item.end)) }))
+    const intervals = protectedIntervals
+      .filter((interval) => interval.end > now)
+      .map((interval) => ({ start: Math.max(now, interval.start), end: Math.min(dayFinish, interval.end) }))
       .filter((interval) => interval.end > interval.start)
       .sort((a, b) => a.start - b.start);
 
@@ -342,8 +475,8 @@ export default function TodayV2Bridge() {
     if (dayFinish - cursor >= 30 * 60) {
       windows.push({ start: cursor, end: dayFinish, minutes: Math.round((dayFinish - cursor) / 60) });
     }
-    return windows.slice(0, 3);
-  }, [timeline]);
+    return windows.slice(0, 4);
+  }, [protectedIntervals, sleepSignal]);
 
   const nextEntry = useMemo(() => {
     const now = Date.now() / 1000;
@@ -354,23 +487,66 @@ export default function TodayV2Bridge() {
     return null;
   }, [timeline]);
 
+  const nextLogistics = useMemo(() => {
+    const now = Date.now() / 1000;
+    const upcoming = timeline.find((item) => item.source === "calendar" && item.start !== null && Number(item.start) > now && item.plan);
+    return upcoming || null;
+  }, [timeline]);
+
+  const bestFit = useMemo(() => {
+    if (!freeWindows.length) return null;
+    const tasks = [...(data?.today.items || [])]
+      .filter((item) => !item.scheduled_at && !["done", "skipped"].includes(item.status))
+      .sort((a, b) => Number(b.priority || 0) - Number(a.priority || 0));
+    for (const window of freeWindows) {
+      const task = tasks.find((item) => Number(item.duration_minutes || 30) <= window.minutes);
+      if (task) return { task, window };
+    }
+    return null;
+  }, [data, freeWindows]);
+
   const recommended = useMemo(() => {
+    const now = Date.now() / 1000;
     if (nextEntry?.status === "Happening now") return { title: nextEntry.item.title, meta: "Stay with the current block." };
+
+    const logistics = nextLogistics?.plan;
+    if (nextLogistics && logistics) {
+      if (logistics.travelMinutes > 0 && now >= logistics.leaveBy) {
+        return { title: `Leave for ${nextLogistics.title}`, meta: `${logistics.estimatedTravel ? "Estimated " : ""}${logistics.travelMinutes} min travel · starts ${clock(nextLogistics.start)}.` };
+      }
+      if (now >= logistics.prepStart) {
+        return { title: `Get ready for ${nextLogistics.title}`, meta: `${logistics.prepMinutes} min prep${logistics.travelMinutes ? ` + ${logistics.travelMinutes} min travel` : ""}.` };
+      }
+    }
+
+    if (conflicts.length) return { title: "Resolve today’s schedule conflict", meta: conflicts[0].title };
+
     const urgent = needs.find((item) => item.tone === "urgent");
     if (urgent) return { title: urgent.title, meta: urgent.meta };
-    const task = needs.find((item) => item.tone === "task");
-    if (task) return { title: task.title, meta: "Give this a time before the day fills up." };
+
+    if (bestFit) {
+      return {
+        title: bestFit.task.title,
+        meta: `Fits inside your ${minutesLabel(bestFit.window.minutes)} window ending at ${clock(bestFit.window.end)}.`,
+      };
+    }
+
+    if (sleepSignal && now >= sleepSignal.windDown) {
+      return { title: "Protect tomorrow’s sleep", meta: `Aim to be asleep around ${clock(sleepSignal.bedtime)} for ${sleepSignal.event.title}.` };
+    }
+
     const study = needs.find((item) => item.tone === "study");
     if (study) return { title: study.title, meta: "This is your clearest learning gap right now." };
     const project = needs.find((item) => item.tone === "project");
     if (project) return { title: project.title, meta: project.meta };
     if (nextEntry) return { title: nextEntry.item.title, meta: `Coming up ${nextEntry.status}.` };
     return { title: "Protect the open space", meta: "Nothing urgent is competing for your attention right now." };
-  }, [needs, nextEntry]);
+  }, [bestFit, conflicts, needs, nextEntry, nextLogistics, sleepSignal]);
 
   const toggleTask = useCallback(async (item: DailyItem) => {
     if (saving) return;
     setSaving(true);
+    setError("");
     try {
       const response = await fetch(`/api/today/${item.id}`, {
         method: "PATCH",
@@ -380,6 +556,28 @@ export default function TodayV2Bridge() {
       });
       if (!response.ok) throw new Error("Could not update that task.");
       await load();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Could not update that task.");
+    } finally {
+      setSaving(false);
+    }
+  }, [load, saving]);
+
+  const completeCalendar = useCallback(async (event: CalendarEvent, status: "completed" | "not_completed") => {
+    if (saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/silk-calendar/events/${event.id}`, {
+        method: "PATCH",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ completion_status: status }),
+      });
+      if (!response.ok) throw new Error("Could not save that check-in.");
+      await load();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Could not save that check-in.");
     } finally {
       setSaving(false);
     }
@@ -390,6 +588,7 @@ export default function TodayV2Bridge() {
     const title = newTask.trim();
     if (!title || saving) return;
     setSaving(true);
+    setError("");
     try {
       const response = await fetch("/api/today", {
         method: "POST",
@@ -400,6 +599,8 @@ export default function TodayV2Bridge() {
       if (!response.ok) throw new Error("Could not add that task.");
       setNewTask("");
       await load();
+    } catch (actionError) {
+      setError(actionError instanceof Error ? actionError.message : "Could not add that task.");
     } finally {
       setSaving(false);
     }
@@ -407,10 +608,11 @@ export default function TodayV2Bridge() {
 
   const openView = useCallback((name: string) => findNavButton(name)?.click(), []);
 
-  if (!target || !active) return null;
+  if (!target || !active || !data) return null;
 
-  const unfinishedTasks = (data?.today.items || []).filter((item) => !["done", "skipped"].includes(item.status)).length;
+  const unfinishedTasks = data.today.items.filter((item) => !["done", "skipped"].includes(item.status)).length;
   const nowLabel = new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+  const totalFree = freeWindows.reduce((sum, window) => sum + window.minutes, 0);
 
   const content = (
     <div className={styles.page}>
@@ -418,16 +620,18 @@ export default function TodayV2Bridge() {
         <div>
           <span className={styles.eyebrow}>DAILY COMMAND CENTER</span>
           <h1>{nowLabel}</h1>
-          <p>{nextEntry ? `${nextEntry.item.title} is ${nextEntry.status.toLowerCase()}.` : "Your schedule is open right now."} SILK has pulled together what deserves attention today.</p>
+          <p>{nextEntry ? `${nextEntry.item.title} is ${nextEntry.status.toLowerCase()}.` : "Your schedule is open right now."} SILK has combined your commitments, prep, travel buffers, tasks, and tomorrow’s first signal.</p>
         </div>
         <button className={styles.refresh} onClick={() => void load()} disabled={loading}><RefreshCw size={15} /> {loading ? "Syncing" : "Refresh"}</button>
       </section>
 
+      {error && <div className={styles.errorBanner}><AlertTriangle size={14} /><span>{error}</span><button onClick={() => setError("")}>Dismiss</button></div>}
+
       <section className={styles.stats}>
-        <div><span>Scheduled</span><strong>{events.length + timeline.filter((item) => item.source === "task").length}</strong><small>time blocks</small></div>
+        <div><span>Scheduled</span><strong>{todayEvents.length + timeline.filter((item) => item.source === "task").length}</strong><small>time blocks</small></div>
         <div><span>Tasks</span><strong>{unfinishedTasks}</strong><small>still open</small></div>
-        <div><span>Needs</span><strong>{needs.length}</strong><small>attention signals</small></div>
-        <div><span>Free room</span><strong>{freeWindows.length ? minutesLabel(freeWindows.reduce((sum, window) => sum + window.minutes, 0)) : "Tight"}</strong><small>visible today</small></div>
+        <div className={conflicts.length ? styles.statWarn : ""}><span>Conflicts</span><strong>{conflicts.length}</strong><small>{conflicts.length ? "needs attention" : "schedule clear"}</small></div>
+        <div><span>Free room</span><strong>{totalFree ? minutesLabel(totalFree) : "Tight"}</strong><small>after prep + travel</small></div>
       </section>
 
       <section className={styles.grid}>
@@ -446,6 +650,7 @@ export default function TodayV2Bridge() {
             <strong>{nextEntry.item.start ? clock(nextEntry.item.start) : "All day"}</strong>
             <span>{nextEntry.status}</span>
             <small>{nextEntry.item.meta}</small>
+            {nextEntry.item.plan && nextEntry.status !== "Happening now" && <em>Prep {clock(nextEntry.item.plan.prepStart)}{nextEntry.item.plan.travelMinutes ? ` · Leave ${clock(nextEntry.item.plan.leaveBy)}` : ""}</em>}
           </div> : <p className={styles.empty}>Nothing scheduled next.</p>}
         </article>
 
@@ -456,7 +661,11 @@ export default function TodayV2Bridge() {
               <div className={`${styles.timelineRow} ${item.done ? styles.done : ""}`} key={item.key}>
                 <div className={styles.time}>{item.start ? clock(item.start) : "ALL DAY"}</div>
                 <span className={styles.lineDot}>{item.done ? <Check size={11} /> : item.source === "calendar" ? <CalendarDays size={11} /> : <ListChecks size={11} />}</span>
-                <div className={styles.timelineCopy}><strong>{item.title}</strong><small>{item.end && item.start ? `${clock(item.start)}–${clock(item.end)} · ` : ""}{item.meta}</small></div>
+                <div className={styles.timelineCopy}>
+                  <strong>{item.title}</strong>
+                  <small>{item.end && item.start ? `${clock(item.start)}–${clock(item.end)} · ` : ""}{item.meta}</small>
+                  {item.plan && item.start && <em>Prep {clock(item.plan.prepStart)}{item.plan.travelMinutes ? ` · leave ${clock(item.plan.leaveBy)} · ${item.plan.estimatedTravel ? "est. " : ""}${item.plan.travelMinutes}m travel` : ""}</em>}
+                </div>
                 {item.dailyItem && <button className={styles.complete} onClick={() => void toggleTask(item.dailyItem!)} disabled={saving} aria-label={item.done ? `Mark ${item.title} incomplete` : `Complete ${item.title}`}><CheckCircle2 size={16} /></button>}
               </div>
             ))}
@@ -475,11 +684,49 @@ export default function TodayV2Bridge() {
           </div>
         </article>
 
+        <article className={`${styles.card} ${styles.timeEngineCard}`}>
+          <div className={styles.cardHeading}><div><span>TIME ENGINE</span><h2>Prep, travel & protection</h2></div><Clock3 size={18} /></div>
+          <div className={styles.engineList}>
+            {nextLogistics?.plan && <div className={styles.engineRow}>
+              <span>Next logistics</span>
+              <strong>{nextLogistics.title}</strong>
+              <small>Prep at {clock(nextLogistics.plan.prepStart)}{nextLogistics.plan.travelMinutes ? ` · leave by ${clock(nextLogistics.plan.leaveBy)} · ${nextLogistics.plan.estimatedTravel ? "estimated " : ""}${nextLogistics.plan.travelMinutes}m travel` : " · no travel buffer"}{nextLogistics.calendarEvent?.location ? ` · ${nextLogistics.calendarEvent.location}` : ""}</small>
+            </div>}
+            {conflicts.length ? <div className={`${styles.engineRow} ${styles.engineAlert}`}>
+              <span>Schedule conflict</span><strong>{conflicts[0].title}</strong><small>{conflicts[0].meta}</small>
+            </div> : <div className={styles.engineRow}><span>Conflict scan</span><strong>Clear</strong><small>No overlapping commitments or prep-buffer collisions detected.</small></div>}
+            {sleepSignal ? <div className={styles.engineRow}>
+              <span>Sleep protection</span><strong>Wind down {clock(sleepSignal.windDown)}</strong><small>Aim asleep by {clock(sleepSignal.bedtime)} · wake around {clock(sleepSignal.wakeAt)} for tomorrow’s {clock(sleepSignal.event.start_at)} {sleepSignal.event.title}. This uses an 8h sleep target plus a 1h wake buffer.</small>
+            </div> : <div className={styles.engineRow}><span>Sleep protection</span><strong>No early trigger</strong><small>No timed commitment before 2 PM tomorrow is loaded.</small></div>}
+          </div>
+          <p className={styles.estimateNote}>Travel defaults to 30 min when a Calendar event has a location. Add <code>travel:45</code> or <code>prep:20</code> to event notes to override the estimate until live routing is connected.</p>
+        </article>
+
+        <article className={`${styles.card} ${styles.checkinCard}`}>
+          <div className={styles.cardHeading}><div><span>CHECK-INS</span><h2>Close the loop</h2></div><CheckCircle2 size={18} /></div>
+          <div className={styles.checkinList}>
+            {pendingCheckins.slice(0, 3).map((event) => <div className={styles.checkin} key={event.id}>
+              <div><strong>{event.title}</strong><small>Ended {clock(event.end_at)} · did you complete it?</small></div>
+              <div className={styles.checkinActions}><button onClick={() => void completeCalendar(event, "completed")} disabled={saving}><Check size={12} /> Yes</button><button onClick={() => void completeCalendar(event, "not_completed")} disabled={saving}>No</button></div>
+            </div>)}
+            {!pendingCheckins.length && <p className={styles.empty}>No completion check-ins waiting.</p>}
+          </div>
+        </article>
+
         <article className={`${styles.card} ${styles.freeCard}`}>
-          <div className={styles.cardHeading}><div><span>OPEN WINDOWS</span><h2>Usable free time</h2></div><Clock3 size={18} /></div>
+          <div className={styles.cardHeading}><div><span>OPEN WINDOWS</span><h2>Actually usable free time</h2></div><Clock3 size={18} /></div>
           <div className={styles.freeList}>
             {freeWindows.map((window, index) => <div key={`${window.start}-${index}`}><strong>{clock(window.start)}–{clock(window.end)}</strong><span>{minutesLabel(window.minutes)}</span></div>)}
-            {!freeWindows.length && <p className={styles.empty}>No 30+ minute open window is visible before 11 PM.</p>}
+            {!freeWindows.length && <p className={styles.empty}>No 30+ minute open window remains after schedule, prep, travel, and sleep protection.</p>}
+          </div>
+          {bestFit && <p className={styles.fitNote}><Sparkles size={12} /> {bestFit.task.title} ({minutesLabel(bestFit.task.duration_minutes || 30)}) fits in the {clock(bestFit.window.start)}–{clock(bestFit.window.end)} window.</p>}
+        </article>
+
+        <article className={`${styles.card} ${styles.conflictCard}`}>
+          <div className={styles.cardHeading}><div><span>CONFLICTS</span><h2>Schedule integrity</h2></div><AlertTriangle size={18} /></div>
+          <div className={styles.conflictList}>
+            {conflicts.map((conflict) => <div className={`${styles.conflict} ${conflict.tone === "hard" ? styles.hardConflict : ""}`} key={conflict.key}><strong>{conflict.title}</strong><small>{conflict.meta}</small></div>)}
+            {!conflicts.length && <p className={styles.clearState}><CheckCircle2 size={14} /> Your timed schedule and prep buffers fit together.</p>}
           </div>
         </article>
 
