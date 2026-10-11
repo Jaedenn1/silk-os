@@ -36,6 +36,9 @@ jobs:
           cache: npm
           cache-dependency-path: silk-os-v0.6/package-lock.json
 
+      - name: Prepare SILK scripts
+        run: chmod +x scripts/*.sh
+
       - name: Install dependencies
         run: npm run install:ci
 
