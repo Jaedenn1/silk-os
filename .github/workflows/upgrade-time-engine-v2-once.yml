@@ -62,3 +62,5 @@ jobs:
           git diff --cached --quiet && exit 0
           git commit -m "Upgrade SILK Adaptive Time Engine to V2"
           git push
+
+# One-time integration workflow; remove after the verified feature commit lands.
