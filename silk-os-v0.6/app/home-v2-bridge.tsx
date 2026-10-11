@@ -20,7 +20,6 @@ import {
   Search,
   Send,
   Sparkles,
-  X,
 } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
@@ -186,10 +185,13 @@ export default function HomeV2Bridge() {
   }, []);
 
   useEffect(() => {
-    syncShell();
+    const initial = window.setTimeout(syncShell, 0);
     const observer = new MutationObserver(syncShell);
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
+    return () => {
+      window.clearTimeout(initial);
+      observer.disconnect();
+    };
   }, [syncShell]);
 
   useEffect(() => {

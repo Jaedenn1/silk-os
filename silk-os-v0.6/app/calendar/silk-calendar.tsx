@@ -295,9 +295,12 @@ export default function SilkCalendar() {
   }, [openEditor, persistMove]);
 
   useEffect(() => {
-    void refreshPending();
+    const initial = window.setTimeout(() => void refreshPending(), 0);
     const timer = window.setInterval(() => void refreshPending(), 60_000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearTimeout(initial);
+      window.clearInterval(timer);
+    };
   }, [refreshPending]);
 
   const saveEvent = useCallback(async () => {
@@ -375,7 +378,7 @@ export default function SilkCalendar() {
           </div>
         </div>
         <div className={styles.actions}>
-          <a className={styles.secondary} href="/">Back to SILK</a>
+          <button type="button" className={styles.secondary} onClick={() => window.location.assign("/")}>Back to SILK</button>
           <button className={styles.primary} onClick={() => openEditor(newDraft())}>+ New event</button>
         </div>
       </header>

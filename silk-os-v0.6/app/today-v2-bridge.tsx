@@ -213,10 +213,13 @@ export default function TodayV2Bridge() {
   }, []);
 
   useEffect(() => {
-    syncShell();
+    const initial = window.setTimeout(syncShell, 0);
     const observer = new MutationObserver(syncShell);
     observer.observe(document.body, { childList: true, subtree: true, characterData: true });
-    return () => observer.disconnect();
+    return () => {
+      window.clearTimeout(initial);
+      observer.disconnect();
+    };
   }, [syncShell]);
 
   useEffect(() => {
@@ -270,7 +273,9 @@ export default function TodayV2Bridge() {
   }, [active]);
 
   useEffect(() => {
-    if (active) void load();
+    if (!active) return;
+    const initial = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(initial);
   }, [active, load]);
 
   useEffect(() => {
