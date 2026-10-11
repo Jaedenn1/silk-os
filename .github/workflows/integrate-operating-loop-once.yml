@@ -38,8 +38,10 @@ jobs:
         run: npm run install:ci
 
       - name: Lint
+        id: lint
+        continue-on-error: true
         working-directory: silk-os-v0.6
-        run: npm run lint
+        run: npm run lint 2>&1 | tee ../operating-loop-lint.txt
 
       - name: Verified production build
         id: build
@@ -47,17 +49,17 @@ jobs:
         working-directory: silk-os-v0.6
         run: npm run build 2>&1 | tee ../operating-loop-build.txt
 
-      - name: Capture build diagnostics
-        if: steps.build.outcome == 'failure'
+      - name: Capture diagnostics
+        if: steps.lint.outcome == 'failure' || steps.build.outcome == 'failure'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add operating-loop-build.txt
-          git commit -m "Capture operating loop build diagnostics"
+          git add operating-loop-lint.txt operating-loop-build.txt
+          git commit -m "Capture operating loop diagnostics"
           git push
 
-      - name: Stop on build failure
-        if: steps.build.outcome == 'failure'
+      - name: Stop on validation failure
+        if: steps.lint.outcome == 'failure' || steps.build.outcome == 'failure'
         run: exit 1
 
       - name: Run tests
