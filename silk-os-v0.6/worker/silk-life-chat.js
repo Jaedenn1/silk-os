@@ -160,6 +160,20 @@ async function workoutStatus(db) {
     return lifePayload(`Your workout plan today is ${text}.`, "workout_status", { workout_items: planned });
   }
 
+  const dayStart = epochForLocal(today, 0, 0);
+  const dayEnd = epochForLocal(addDateKey(today, 1), 0, 0);
+  const calendarWorkouts = (await db.prepare(`
+    SELECT id, title, start_at, end_at, location
+    FROM silk_calendar_events_v2
+    WHERE category = 'workout' AND start_at >= ?1 AND start_at < ?2
+    ORDER BY start_at, id
+    LIMIT 4
+  `).bind(dayStart, dayEnd).all().catch(() => ({ results: [] }))).results || [];
+  if (calendarWorkouts.length) {
+    const text = calendarWorkouts.map((item) => `${item.title} at ${formatClock(Number(item.start_at))}`).join("; ");
+    return lifePayload(`Your workout plan today is ${text}.`, "workout_status", { calendar_workouts: calendarWorkouts });
+  }
+
   const recent = await db.prepare(`
     SELECT id, name, started_at, ended_at
     FROM workout_sessions

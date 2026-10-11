@@ -418,6 +418,7 @@ async function applyCompletion(db, pending, result, source) {
           updated_at = ?4
       WHERE id = ?1
     `).bind(Number(row.id), result === "completed" ? "done" : "skipped", source, now).run();
+    if (result === "completed") await syncDailyCompletionToModules(db, row, category, now);
   } else {
     throw new CompletionError(400, "Unsupported completion target.");
   }
@@ -442,6 +443,47 @@ async function applyCompletion(db, pending, result, source) {
   );
 
   return record;
+}
+
+async function syncDailyCompletionToModules(db, row, category, now) {
+  const id = Number(row.id || 0);
+  const title = clean(row.title, 240) || "Session";
+  const start = Number(row.scheduled_at || now);
+  const duration = Math.max(1, Number(row.duration_minutes || 30));
+  const marker = `SILK daily item:${id}`;
+
+  if (category === "study") {
+    const existing = await db.prepare(`SELECT id FROM study_sessions WHERE source_text = ?1 LIMIT 1`).bind(marker).first();
+    if (!existing) {
+      const subject = title.replace(/\s+(?:study|review|session|block)$/i, "").trim() || title;
+      await db.prepare(`
+        INSERT INTO study_sessions
+          (course, subject, session_type, studied_at, duration_minutes, strengths, weaknesses, next_step, source_text, created_at, updated_at)
+        VALUES ('SILK', ?1, 'Study session', ?2, ?3, '', '', '', ?4, ?5, ?5)
+      `).bind(subject, start, duration, marker, now).run();
+    }
+    return;
+  }
+
+  if (category === "workout") {
+    const existing = await db.prepare(`SELECT id FROM workout_sessions WHERE notes = ?1 LIMIT 1`).bind(marker).first();
+    if (existing) return;
+
+    const active = await db.prepare(`
+      SELECT id FROM workout_sessions
+      WHERE ended_at IS NULL AND lower(coalesce(name,'')) = lower(?1)
+      ORDER BY started_at DESC, id DESC LIMIT 1
+    `).bind(title).first();
+    if (active) {
+      await db.prepare(`UPDATE workout_sessions SET ended_at = ?2, notes = ?3 WHERE id = ?1`).bind(Number(active.id), now, marker).run();
+      return;
+    }
+
+    await db.prepare(`
+      INSERT INTO workout_sessions (name, started_at, ended_at, notes)
+      VALUES (?1, ?2, ?3, ?4)
+    `).bind(title, start, start + duration * 60, marker).run();
+  }
 }
 
 async function buildCompletionSummary(db) {
