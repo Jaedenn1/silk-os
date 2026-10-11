@@ -43,32 +43,19 @@ jobs:
         working-directory: silk-os-v0.6
         run: npm run lint
 
-      - name: Verified production build
+      - name: Diagnose production build
         working-directory: silk-os-v0.6
-        run: npm run build
+        shell: bash
+        run: |
+          set +e
+          npm run build > ../operating-loop-build2.txt 2>&1
+          echo $? > ../operating-loop-build2-exit.txt
+          exit 0
 
-      - name: Run tests
-        working-directory: silk-os-v0.6
-        run: node --test tests/*.test.mjs
-
-      - name: Commit verified operating loop
+      - name: Commit build diagnostic only
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add \
-            silk-os-v0.6/app/page.tsx \
-            silk-os-v0.6/app/silk-os.tsx \
-            silk-os-v0.6/app/today-v2-bridge.tsx \
-            silk-os-v0.6/app/momentum-bridge.tsx \
-            silk-os-v0.6/app/proactive-silk.tsx \
-            silk-os-v0.6/app/inspiration-screensaver.tsx \
-            silk-os-v0.6/worker/index.ts \
-            silk-os-v0.6/worker/silk-time-engine.js \
-            silk-os-v0.6/worker/silk-proactive.js \
-            silk-os-v0.6/worker/silk-life-chat.js \
-            silk-os-v0.6/worker/silk-completions.js \
-            silk-os-v0.6/tests/time-engine.test.mjs \
-            silk-os-v0.6/HIGH-PRIORITY-3D-INSPIRATION-SCREENSAVER.md
-          git diff --cached --quiet && exit 0
-          git commit -m "Integrate Momentum adaptive time proactive SILK and screensaver"
+          git add operating-loop-build2.txt operating-loop-build2-exit.txt
+          git commit -m "Capture post-fix operating loop build diagnostic"
           git push
