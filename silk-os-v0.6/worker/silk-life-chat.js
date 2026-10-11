@@ -50,7 +50,8 @@ export function lifeIntent(message) {
   }
 
   if (/\b(?:finish|end|complete)\b[\s\S]{0,120}\b(?:workout|gym|training|full body|leg day|push day|pull day|upper body|lower body)\b/i.test(text) ||
-      /\b(?:workout|gym|training)\b[\s\S]{0,100}\b(?:finished|done|complete)\b/i.test(text)) {
+      /\b(?:workout|gym|training)\b[\s\S]{0,100}\b(?:finished|done|complete)\b/i.test(text) ||
+      /\bmark\b[\s\S]{0,140}\b(?:workout|gym|training|full body|leg day|push day|pull day|upper body|lower body)\b[\s\S]{0,80}\b(?:complete|done|finished)\b/i.test(text)) {
     return "workout_finish";
   }
   if (/\b(?:start|begin)\b[\s\S]{0,160}\b(?:workout|gym|training|full body|leg day|push day|pull day|upper body|lower body)\b/i.test(text) ||

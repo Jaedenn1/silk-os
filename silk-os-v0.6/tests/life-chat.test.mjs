@@ -17,6 +17,7 @@ test("Life Control recognizes Workout commands without stealing Calendar moves",
   assert.equal(extractWorkoutName("Start Full Body A workout"), "Full Body A");
   assert.equal(extractWorkoutName("Start a workout"), "Workout");
   assert.equal(lifeIntent("Finish my workout"), "workout_finish");
+  assert.equal(lifeIntent("Mark Full Body A complete"), "workout_finish");
   assert.equal(lifeIntent("Move my workout to 7"), null);
   assert.equal(lifeIntent("Do I have time for the gym?"), null);
 });
