@@ -46,13 +46,14 @@ export default function CalendarNavBridge() {
   }, []);
 
   useEffect(() => {
-    void refresh();
+    const initial = window.setTimeout(() => void refresh(), 0);
     const timer = window.setInterval(() => void refresh(), 60_000);
     const onVisible = () => {
       if (document.visibilityState === "visible") void refresh();
     };
     document.addEventListener("visibilitychange", onVisible);
     return () => {
+      window.clearTimeout(initial);
       window.clearInterval(timer);
       document.removeEventListener("visibilitychange", onVisible);
     };
