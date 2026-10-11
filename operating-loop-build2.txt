@@ -1,45 +1,0 @@
-
-> silk-os@0.7.0 build
-> bash scripts/build-verified.sh
-
-/usr/bin/timeout
-Running bounded vinext build...
-
-  vinext build  (Vite 8.0.13)
-
-[34m[1/5] analyze client references...[39m
-[2Ktransforming...✓ 156 modules transformed.
-rendering chunks...
-[32m✓ built in 1.51s[39m
-[34m[2/5] analyze server references...[39m
-[2Ktransforming...✓ 735 modules transformed.
-rendering chunks...
-[32m✓ built in 1.20s[39m
-[34m[3/5] build rsc environment...[39m
-[2Ktransforming...✓ 162 modules transformed.
-rendering chunks...
-computing gzip size...
-[32m✓ built in 861ms[39m
-[34m[4/5] build client environment...[39m
-[2Ktransforming...✓ 2498 modules transformed.
-[31m✗[39m Build failed in 2.15s
-[31mBuild failed with 1 error:
-
-[plugin vite:css-post]
-SyntaxError: [lightningcss minify] Unexpected token AtKeyword("media")
-1  |  ...._empty_14ia4_1{color:#777382;font-size:12px;margin:6px 0}._@media(max-width:980px)_14ia4_1{._metrics_14ia4_1{grid...
-   |                                                                 ^
-    at Module.<anonymous> (/home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/vite/node_modules/lightningcss/node/index.js:56:14)
-    at minifyCSS (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/vite/dist/node/chunks/node.js:21312:59)
-    at async finalizeCss (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/vite/dist/node/chunks/node.js:21157:36)[39m
-    at aggregateBindingErrorsIntoJsError (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/rolldown/dist/shared/error-CkdMJ9ps.mjs:48:18)
-    at unwrapBindingResult (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/rolldown/dist/shared/error-CkdMJ9ps.mjs:18:128)
-    at #build (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/rolldown/dist/shared/rolldown-build-BVD3dIdE.mjs:3275:34)
-    at async buildEnvironment (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/vite/dist/node/chunks/node.js:33133:64)
-    at async Object.build (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/vite/dist/node/chunks/node.js:33555:19)
-    at async buildApp (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/@vitejs/plugin-rsc/dist/plugin-BhzHKRFo.js:636:3)
-    at async BasicMinimalPluginContext.handler (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/@vitejs/plugin-rsc/dist/plugin-BhzHKRFo.js:749:43)
-    at async Object.buildApp (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/vite/dist/node/chunks/node.js:33549:5)
-    at async buildApp (file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/node_modules/vinext/dist/cli.js:225:2) {
-  errors: [Getter/Setter]
-}
