@@ -1,0 +1,175 @@
+TAP version 13
+# file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/worker/silk-time-engine.js:221
+# export export function sampleConfidence(samples) {
+# ^^^^^^
+# SyntaxError: Unexpected token 'export'
+#     at compileSourceTextModule (node:internal/modules/esm/utils:346:16)
+#     at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:107:18)
+#     at \#translate (node:internal/modules/esm/loader:540:12)
+#     at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:587:27)
+#     at async ModuleJob._link (node:internal/modules/esm/module_job:162:19)
+# Node.js v22.19.0
+# Subtest: tests/calendar-completions.test.mjs
+not ok 1 - tests/calendar-completions.test.mjs
+  ---
+  duration_ms: 50.249274
+  type: 'test'
+  location: '/home/runner/work/silk-os/silk-os/silk-os-v0.6/tests/calendar-completions.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/worker/silk-time-engine.js:221
+# export export function sampleConfidence(samples) {
+# ^^^^^^
+# SyntaxError: Unexpected token 'export'
+#     at compileSourceTextModule (node:internal/modules/esm/utils:346:16)
+#     at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:107:18)
+#     at \#translate (node:internal/modules/esm/loader:540:12)
+#     at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:587:27)
+#     at async ModuleJob._link (node:internal/modules/esm/module_job:162:19)
+# Node.js v22.19.0
+# Subtest: tests/life-chat.test.mjs
+not ok 2 - tests/life-chat.test.mjs
+  ---
+  duration_ms: 39.031319
+  type: 'test'
+  location: '/home/runner/work/silk-os/silk-os/silk-os-v0.6/tests/life-chat.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+# Subtest: renders Silk production metadata
+not ok 3 - renders Silk production metadata
+  ---
+  duration_ms: 2.105363
+  type: 'test'
+  location: '/home/runner/work/silk-os/silk-os/silk-os-v0.6/tests/rendered-html.test.mjs:4:1'
+  failureType: 'testCodeFailure'
+  error: "Cannot find module '/home/runner/work/silk-os/silk-os/silk-os-v0.6/dist/server/index.js' imported from /home/runner/work/silk-os/silk-os/silk-os-v0.6/tests/rendered-html.test.mjs"
+  code: 'ERR_MODULE_NOT_FOUND'
+  stack: |-
+    finalizeResolution (node:internal/modules/esm/resolve:274:11)
+    moduleResolve (node:internal/modules/esm/resolve:859:10)
+    defaultResolve (node:internal/modules/esm/resolve:983:11)
+    #cachedDefaultResolve (node:internal/modules/esm/loader:717:20)
+    ModuleLoader.resolve (node:internal/modules/esm/loader:694:38)
+    ModuleLoader.getModuleJobForImport (node:internal/modules/esm/loader:308:38)
+    onImport.tracePromise.__proto__ (node:internal/modules/esm/loader:650:36)
+    TracingChannel.tracePromise (node:diagnostics_channel:344:14)
+    ModuleLoader.import (node:internal/modules/esm/loader:649:21)
+    defaultImportModuleDynamicallyForModule (node:internal/modules/esm/utils:222:31)
+  ...
+# Subtest: automatic routing sends small, routine, and complex work to the intended model
+ok 4 - automatic routing sends small, routine, and complex work to the intended model
+  ---
+  duration_ms: 1.890498
+  type: 'test'
+  ...
+# Subtest: automatic policy keeps ordinary explanations off Terra
+ok 5 - automatic policy keeps ordinary explanations off Terra
+  ---
+  duration_ms: 1.447244
+  type: 'test'
+  ...
+# Subtest: automatic policy uses Nano for tiny arithmetic and greetings
+ok 6 - automatic policy uses Nano for tiny arithmetic and greetings
+  ---
+  duration_ms: 0.233239
+  type: 'test'
+  ...
+# Subtest: automatic policy reserves Terra for genuinely difficult work
+ok 7 - automatic policy reserves Terra for genuinely difficult work
+  ---
+  duration_ms: 0.160873
+  type: 'test'
+  ...
+# Subtest: authentication comparison rejects wrong values and length mismatches
+ok 8 - authentication comparison rejects wrong values and length mismatches
+  ---
+  duration_ms: 0.300245
+  type: 'test'
+  ...
+# Subtest: memory normalization deduplicates punctuation and applies safe privacy defaults
+ok 9 - memory normalization deduplicates punctuation and applies safe privacy defaults
+  ---
+  duration_ms: 0.297831
+  type: 'test'
+  ...
+# Subtest: memory retrieval stays relevant and bounded before it reaches a paid model
+ok 10 - memory retrieval stays relevant and bounded before it reaches a paid model
+  ---
+  duration_ms: 0.592585
+  type: 'test'
+  ...
+# Subtest: sensitive memory requires an explicit remember request and secrets are never stored
+ok 11 - sensitive memory requires an explicit remember request and secrets are never stored
+  ---
+  duration_ms: 0.54201
+  type: 'test'
+  ...
+# Subtest: calendar events become stable daily tracker items
+ok 12 - calendar events become stable daily tracker items
+  ---
+  duration_ms: 0.989352
+  type: 'test'
+  ...
+# Subtest: daily completion excludes skipped work and calculates focus time
+ok 13 - daily completion excludes skipped work and calculates focus time
+  ---
+  duration_ms: 0.512645
+  type: 'test'
+  ...
+# Subtest: daily tracker completion cascades to project tasks
+ok 14 - daily tracker completion cascades to project tasks
+  ---
+  duration_ms: 0.235513
+  type: 'test'
+  ...
+# Subtest: focused memory graph spreads activation to connected context only
+ok 15 - focused memory graph spreads activation to connected context only
+  ---
+  duration_ms: 0.479282
+  type: 'test'
+  ...
+# Subtest: Toronto local date keys remain stable
+ok 16 - Toronto local date keys remain stable
+  ---
+  duration_ms: 14.151037
+  type: 'test'
+  ...
+# file:///home/runner/work/silk-os/silk-os/silk-os-v0.6/worker/silk-time-engine.js:221
+# export export function sampleConfidence(samples) {
+# ^^^^^^
+# SyntaxError: Unexpected token 'export'
+#     at compileSourceTextModule (node:internal/modules/esm/utils:346:16)
+#     at ModuleLoader.moduleStrategy (node:internal/modules/esm/translators:107:18)
+#     at \#translate (node:internal/modules/esm/loader:540:12)
+#     at ModuleLoader.loadAndTranslate (node:internal/modules/esm/loader:587:27)
+#     at async ModuleJob._link (node:internal/modules/esm/module_job:162:19)
+# Node.js v22.19.0
+# Subtest: tests/time-engine.test.mjs
+not ok 5 - tests/time-engine.test.mjs
+  ---
+  duration_ms: 38.224691
+  type: 'test'
+  location: '/home/runner/work/silk-os/silk-os/silk-os-v0.6/tests/time-engine.test.mjs:1:1'
+  failureType: 'testCodeFailure'
+  exitCode: 1
+  signal: ~
+  error: 'test failed'
+  code: 'ERR_TEST_FAILURE'
+  ...
+1..17
+# tests 17
+# suites 0
+# pass 13
+# fail 4
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 140.677078

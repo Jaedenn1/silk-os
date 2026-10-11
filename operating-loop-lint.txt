@@ -1,0 +1,48 @@
+
+> silk-os@0.7.0 lint
+> bash scripts/sites-env.sh -- eslint . --ignore-pattern dist --ignore-pattern .next
+
+
+/home/runner/work/silk-os/silk-os/silk-os-v0.6/app/momentum-bridge.tsx
+  135:5  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/home/runner/work/silk-os/silk-os/silk-os-v0.6/app/momentum-bridge.tsx:135:5
+  133 |     const enabled = window.localStorage.getItem("silk_proactive_enabled") === "true";
+  134 |     const permission = "Notification" in window ? Notification.permission : "unsupported";
+> 135 |     setNotifications(enabled && permission === "granted" ? "on" : permission);
+      |     ^^^^^^^^^^^^^^^^ Avoid calling setState() directly within an effect
+  136 |     setScreensaverEnabled(window.localStorage.getItem("silk_screensaver_enabled") !== "false");
+  137 |     setScreensaverDelay(Math.max(1, Math.min(30, Number(window.localStorage.getItem("silk_screensaver_delay_minutes") || 3))));
+  138 |   }, [active]);  react-hooks/set-state-in-effect
+
+/home/runner/work/silk-os/silk-os/silk-os-v0.6/app/proactive-silk.tsx
+  91:10  error  Error: Calling setState synchronously within an effect can trigger cascading renders
+
+Effects are intended to synchronize state between React and external systems such as manually updating the DOM, state management libraries, or other platform APIs. In general, the body of an effect should do one or both of the following:
+* Update external systems with the latest state from React.
+* Subscribe for updates from some external system, calling setState in a callback function when external state changes.
+
+Calling setState synchronously within an effect body causes cascading renders that can hurt performance, and is not recommended. (https://react.dev/learn/you-might-not-need-an-effect).
+
+/home/runner/work/silk-os/silk-os/silk-os-v0.6/app/proactive-silk.tsx:91:10
+  89 |
+  90 |   useEffect(() => {
+> 91 |     void initialize();
+     |          ^^^^^^^^^^ Avoid calling setState() directly within an effect
+  92 |     const onEnable = () => void initialize().then((ready) => {
+  93 |       if (ready) window.setTimeout(() => void poll(), 0);
+  94 |     });  react-hooks/set-state-in-effect
+
+/home/runner/work/silk-os/silk-os/silk-os-v0.6/tests/calendar-completions.test.mjs
+  18:10  warning  'year' is assigned a value but never used   @typescript-eslint/no-unused-vars
+  18:16  warning  'month' is assigned a value but never used  @typescript-eslint/no-unused-vars
+  18:23  warning  'day' is assigned a value but never used    @typescript-eslint/no-unused-vars
+
+✖ 5 problems (2 errors, 3 warnings)
+
