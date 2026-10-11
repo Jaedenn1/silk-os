@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { lifeIntent, extractDurationMinutes, extractStudySubject, resolveDateKey } from "../worker/silk-life-chat.js";
+import { lifeIntent, extractDurationMinutes, extractStudySubject, extractWorkoutName, resolveDateKey } from "../worker/silk-life-chat.js";
 
 test("Life Control recognizes Study commands", () => {
   assert.equal(lifeIntent("What should I study tonight?"), "study_recommend");
@@ -14,6 +14,8 @@ test("Life Control recognizes Study commands", () => {
 test("Life Control recognizes Workout commands without stealing Calendar moves", () => {
   assert.equal(lifeIntent("What workout am I doing today?"), "workout_status");
   assert.equal(lifeIntent("Start Full Body A workout"), "workout_start");
+  assert.equal(extractWorkoutName("Start Full Body A workout"), "Full Body A");
+  assert.equal(extractWorkoutName("Start a workout"), "Workout");
   assert.equal(lifeIntent("Finish my workout"), "workout_finish");
   assert.equal(lifeIntent("Move my workout to 7"), null);
   assert.equal(lifeIntent("Do I have time for the gym?"), null);

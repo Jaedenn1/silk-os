@@ -356,8 +356,13 @@ export function extractStudySubject(message) {
     .trim().replace(/[.!?]+$/, ""), 180);
 }
 
-function extractWorkoutName(message) {
-  const text = String(message || "").replace(/\b(?:start|begin)\b/ig, " ").replace(/\b(?:my|a|the)\b/ig, " ").replace(/\s+/g, " ").trim().replace(/[.!?]+$/, "");
+export function extractWorkoutName(message) {
+  const text = String(message || "")
+    .replace(/\b(?:start|begin)\b/ig, " ")
+    .replace(/^\s*(?:my|a|the)\s+/i, "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[.!?]+$/, "");
   if (/^(?:workout|gym|training)$/i.test(text)) return "Workout";
   return clean(text.replace(/\s+(?:workout|session)$/i, "").trim(), 100) || "Workout";
 }
