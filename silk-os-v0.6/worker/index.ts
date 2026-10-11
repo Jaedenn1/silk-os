@@ -4,6 +4,7 @@ import handler from "vinext/server/app-router-entry";
 import silkCore from "./silk-core.js";
 import { handleSilkCalendar, calendarErrorResponse } from "./silk-calendar.js";
 import { tryHandleSilkCalendarChat } from "./silk-calendar-chat.js";
+import { tryHandleSilkLifeChat } from "./silk-life-chat.js";
 import { handleSilkMaps, mapsErrorResponse } from "./silk-maps.js";
 import { handleSilkCompletions, completionErrorResponse } from "./silk-completions.js";
 import { classifyAutomaticChatTier, routeAutomaticModelEnv } from "./model-routing.js";
@@ -57,6 +58,12 @@ const worker = {
     if (request.method === "POST" && ["/api/chat", "/api/chat/stream"].includes(url.pathname)) {
       const authenticated = await ownerSessionIsAuthenticated(request, env, ctx);
       if (authenticated) {
+        try {
+          const lifeChat = await tryHandleSilkLifeChat(request, env);
+          if (lifeChat) return withSecurityHeaders(lifeChat);
+        } catch (error) {
+          console.error("SILK Life Control chat route failed", error);
+        }
         try {
           const calendarChat = await tryHandleSilkCalendarChat(request, env);
           if (calendarChat) return withSecurityHeaders(calendarChat);
