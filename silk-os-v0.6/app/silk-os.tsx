@@ -14,7 +14,7 @@ import { FormEvent, useCallback, useEffect, useState, type ReactNode } from "rea
 import { SilkCoreWebGL, type SilkCoreState } from "./components/silk-core-webgl";
 import { MemoryGalaxyWebGL } from "./components/memory-galaxy-webgl";
 
-type View = "home"|"chat"|"today"|"calendar"|"projects"|"study"|"workouts"|"memory"|"integrations"|"activity"|"agents"|"devices"|"settings";
+type View = "home"|"chat"|"today"|"momentum"|"calendar"|"projects"|"study"|"workouts"|"memory"|"integrations"|"activity"|"agents"|"devices"|"settings";
 type CoreState = SilkCoreState;
 type Source = { title:string; url:string; snippet?:string };
 type ChatMessage = { id:string; role:"user"|"assistant"; text:string; model?:string; sources?:Source[] };
@@ -72,7 +72,7 @@ const previewData:SilkData={
 
 const NAV:Array<{id:View;label:string;icon:typeof Home}>=[
   {id:"home",label:"Overview",icon:Home},{id:"chat",label:"Ask Silk",icon:MessageCircle},{id:"today",label:"Today",icon:ListChecks},
-  {id:"calendar",label:"Calendar",icon:CalendarDays},{id:"projects",label:"Projects",icon:FolderKanban},{id:"study",label:"Study",icon:BookOpen},
+  {id:"momentum",label:"Momentum",icon:Gauge},{id:"calendar",label:"Calendar",icon:CalendarDays},{id:"projects",label:"Projects",icon:FolderKanban},{id:"study",label:"Study",icon:BookOpen},
   {id:"workouts",label:"Workouts",icon:Dumbbell},{id:"memory",label:"Memory",icon:Brain},{id:"integrations",label:"Connections",icon:Link2},
   {id:"activity",label:"Activity",icon:Activity},{id:"agents",label:"Agents",icon:Bot},{id:"devices",label:"Devices",icon:Cpu},{id:"settings",label:"Settings",icon:Settings},
 ];

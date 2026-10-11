@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import styles from "./inspiration-screensaver.module.css";
 
 type Figure = {
@@ -154,7 +154,7 @@ export default function InspirationScreensaver() {
           <div className={styles.posterTitle}><span>BUILT ACROSS GENERATIONS</span><h1>GREATNESS</h1><p>Different disciplines. Same refusal to remain ordinary.</p></div>
           <div className={styles.stage}>
             {FIGURES.map((figure, index) => (
-              <article className={`${styles.figure} ${styles[`depth${index % 4}`]}`} key={figure.name} style={{ "--i": index } as React.CSSProperties}>
+              <article className={`${styles.figure} ${styles[`depth${index % 4}`]}`} key={figure.name} style={{ "--i": index } as CSSProperties}>
                 <div className={styles.silhouette}><span>{figure.mark}</span></div>
                 <div className={styles.figureCopy}><strong>{figure.name}</strong><span>{figure.field}</span><small>{figure.era}</small></div>
               </article>

@@ -155,6 +155,16 @@ type CompletionSummary = {
   };
 };
 
+
+type AdaptiveTimeProfile = {
+  prep_by_category: Record<string, { minutes: number; default_minutes: number; samples: number; confidence: string; learned: boolean }>;
+  travel_by_context: Array<{ context: string; minutes: number; samples: number; confidence: string }>;
+  study: { recommended_minutes: number; samples: number; preferred_start_hour: number | null };
+  workout: { recommended_minutes: number; samples: number; preferred_start_hour: number | null };
+  underestimation: { factor: number | null; samples: number; label: string };
+  active_prep?: { event_id: number; title: string; category: string; planned_minutes: number; started_at: number } | null;
+};
+
 const DEFAULT_PREP: Record<string, number> = {
   work: 30,
   school: 30,
@@ -230,20 +240,25 @@ function noteMinutes(notes: string | undefined, key: "prep" | "travel") {
   return Number.isFinite(value) && value >= 0 && value <= 240 ? value : null;
 }
 
-function planEvent(event: CalendarEvent, liveRoute?: RouteEstimate | null): EventPlan | null {
+function planEvent(event: CalendarEvent, liveRoute?: RouteEstimate | null, profile?: AdaptiveTimeProfile | null): EventPlan | null {
   if (event.all_day || !event.start_at) return null;
   const prepOverride = noteMinutes(event.notes, "prep");
   const travelOverride = noteMinutes(event.notes, "travel");
   const liveTravel = liveRoute?.eventId === event.id ? liveRoute.travel_minutes : null;
-  const prepMinutes = prepOverride ?? DEFAULT_PREP[event.category] ?? 10;
-  const travelMinutes = travelOverride ?? liveTravel ?? (event.location.trim() ? 30 : 0);
+  const category = Object.prototype.hasOwnProperty.call(DEFAULT_PREP, event.category) ? event.category : "other";
+  const learnedPrep = profile?.prep_by_category?.[category];
+  const learnedTravel = event.location.trim()
+    ? profile?.travel_by_context?.find((item) => item.samples >= 2 && item.context.toLowerCase() === event.location.trim().toLowerCase())?.minutes ?? null
+    : null;
+  const prepMinutes = prepOverride ?? (learnedPrep?.learned ? learnedPrep.minutes : DEFAULT_PREP[category] ?? 10);
+  const travelMinutes = travelOverride ?? liveTravel ?? learnedTravel ?? (event.location.trim() ? 30 : 0);
   const leaveBy = event.start_at - travelMinutes * 60;
   return {
     prepMinutes,
     travelMinutes,
     leaveBy,
     prepStart: leaveBy - prepMinutes * 60,
-    estimatedTravel: travelOverride === null && liveTravel === null && travelMinutes > 0,
+    estimatedTravel: travelOverride === null && liveTravel === null && learnedTravel === null && travelMinutes > 0,
   };
 }
 
@@ -254,6 +269,7 @@ export default function TodayV2Bridge() {
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [pendingCheckins, setPendingCheckins] = useState<PendingCheckin[]>([]);
   const [completionSummary, setCompletionSummary] = useState<CompletionSummary | null>(null);
+  const [timeProfile, setTimeProfile] = useState<AdaptiveTimeProfile | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [newTask, setNewTask] = useState("");
@@ -304,10 +320,11 @@ export default function TodayV2Bridge() {
       if (!bootstrapResponse.ok) throw new Error("Today could not load your SILK data.");
       setData((await bootstrapResponse.json()) as TodayData);
 
-      const [calendarResponse, pendingResponse, completionResponse] = await Promise.all([
+      const [calendarResponse, pendingResponse, completionResponse, timeResponse] = await Promise.all([
         fetch(`/api/silk-calendar/events?${query}`, { credentials: "same-origin" }),
         fetch("/api/completions/pending", { credentials: "same-origin" }),
         fetch("/api/completions/summary", { credentials: "same-origin" }),
+        fetch("/api/time-engine/profile", { credentials: "same-origin" }),
       ]);
 
       if (calendarResponse.ok) {
@@ -328,6 +345,12 @@ export default function TodayV2Bridge() {
         setCompletionSummary((await completionResponse.json().catch(() => null)) as CompletionSummary | null);
       } else {
         setCompletionSummary(null);
+      }
+
+      if (timeResponse.ok) {
+        setTimeProfile((await timeResponse.json().catch(() => null)) as AdaptiveTimeProfile | null);
+      } else {
+        setTimeProfile(null);
       }
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Today could not refresh.");
@@ -375,7 +398,7 @@ export default function TodayV2Bridge() {
         ? event.completion_status === "completed"
         : event.end_at < Date.now() / 1000,
       calendarEvent: event,
-      plan: planEvent(event, routeEstimate),
+      plan: planEvent(event, routeEstimate, timeProfile),
     }));
 
     const taskEntries: TimelineEntry[] = (data?.today.items || [])
@@ -396,7 +419,7 @@ export default function TodayV2Bridge() {
       if (a.start !== null && b.start === null) return 1;
       return Number(a.start || 0) - Number(b.start || 0);
     });
-  }, [data, routeEstimate, todayEvents]);
+  }, [data, routeEstimate, timeProfile, todayEvents]);
 
   const conflicts = useMemo<Conflict[]>(() => {
     const timed = timeline
@@ -432,12 +455,12 @@ export default function TodayV2Bridge() {
 
   const sleepSignal = useMemo<SleepSignal | null>(() => {
     if (!tomorrowFirst) return null;
-    const plan = planEvent(tomorrowFirst);
+    const plan = planEvent(tomorrowFirst, null, timeProfile);
     if (!plan) return null;
     const wakeAt = plan.prepStart - 60 * 60;
     const bedtime = wakeAt - 8 * 60 * 60;
     return { event: tomorrowFirst, wakeAt, bedtime, windDown: bedtime - 30 * 60 };
-  }, [tomorrowFirst]);
+  }, [timeProfile, tomorrowFirst]);
 
   const needs = useMemo<Need[]>(() => {
     const items: Need[] = [];
@@ -721,6 +744,16 @@ export default function TodayV2Bridge() {
             const payload = await response.json().catch(() => ({})) as Omit<RouteEstimate, "eventId"> & { error?: string };
             if (!response.ok) throw new Error(payload.error || "SILK could not calculate that route.");
             setRouteEstimate({ ...payload, eventId: routeTarget.id });
+            void fetch("/api/time-engine/observe", {
+              method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                kind: "travel_estimate",
+                category: routeTarget.category,
+                context_key: routeTarget.location,
+                actual_minutes: payload.travel_minutes,
+                metadata: { traffic_delay_minutes: payload.traffic?.delay_minutes || 0, provider: payload.traffic?.provider || null },
+              }),
+            }).catch(() => undefined);
           } catch (routeError) {
             setError(routeError instanceof Error ? routeError.message : "SILK could not calculate that route.");
           } finally {
@@ -737,6 +770,30 @@ export default function TodayV2Bridge() {
       { enableHighAccuracy: false, timeout: 10_000, maximumAge: 5 * 60_000 },
     );
   }, [routeBusy, routeTarget]);
+
+  const togglePrepTracking = useCallback(async () => {
+    const entry = nextLogistics;
+    const event = entry?.calendarEvent;
+    const plan = entry?.plan;
+    if (!event || !plan || saving) return;
+    const tracking = timeProfile?.active_prep?.event_id === event.id;
+    setSaving(true);
+    setError("");
+    try {
+      const response = await fetch(`/api/time-engine/prep/${tracking ? "finish" : "start"}`, {
+        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ event_id: event.id, title: event.title, category: event.category, planned_minutes: plan.prepMinutes }),
+      });
+      const payload = await response.json().catch(() => ({})) as { error?: string; profile?: AdaptiveTimeProfile };
+      if (!response.ok) throw new Error(payload.error || "SILK could not update the prep timer.");
+      if (payload.profile) setTimeProfile(payload.profile);
+      await load();
+    } catch (prepError) {
+      setError(prepError instanceof Error ? prepError.message : "SILK could not update the prep timer.");
+    } finally {
+      setSaving(false);
+    }
+  }, [load, nextLogistics, saving, timeProfile]);
 
   const openView = useCallback((name: string) => findNavButton(name)?.click(), []);
 
@@ -823,6 +880,12 @@ export default function TodayV2Bridge() {
               <span>Next logistics</span>
               <strong>{nextLogistics.title}</strong>
               <small>Prep at {clock(nextLogistics.plan.prepStart)}{nextLogistics.plan.travelMinutes ? ` · leave by ${clock(nextLogistics.plan.leaveBy)} · ${nextLogistics.plan.estimatedTravel ? "estimated " : ""}${nextLogistics.plan.travelMinutes}m travel` : " · no travel buffer"}{nextLogistics.calendarEvent?.location ? ` · ${nextLogistics.calendarEvent.location}` : ""}</small>
+              {nextLogistics.calendarEvent && <button className={styles.routeButton} onClick={() => void togglePrepTracking()} disabled={saving}>{timeProfile?.active_prep?.event_id === nextLogistics.calendarEvent.id ? "Ready · stop prep timer" : "Start prep timer"}</button>}
+            </div>}
+            {timeProfile && <div className={styles.engineRow}>
+              <span>Learned behavior</span>
+              <strong>{timeProfile.underestimation.factor ? `${timeProfile.underestimation.factor.toFixed(2)}× planning factor` : "Still learning your planning accuracy"}</strong>
+              <small>Study target {timeProfile.study.recommended_minutes}m · workout target {timeProfile.workout.recommended_minutes}m · {timeProfile.underestimation.label}</small>
             </div>}
             {conflicts.length ? <div className={`${styles.engineRow} ${styles.engineAlert}`}>
               <span>Schedule conflict</span><strong>{conflicts[0].title}</strong><small>{conflicts[0].meta}</small>
@@ -831,7 +894,7 @@ export default function TodayV2Bridge() {
               <span>Sleep protection</span><strong>Wind down {clock(sleepSignal.windDown)}</strong><small>Aim asleep by {clock(sleepSignal.bedtime)} · wake around {clock(sleepSignal.wakeAt)} for tomorrow’s {clock(sleepSignal.event.start_at)} {sleepSignal.event.title}. This uses an 8h sleep target plus a 1h wake buffer.</small>
             </div> : <div className={styles.engineRow}><span>Sleep protection</span><strong>No early trigger</strong><small>No timed commitment before 2 PM tomorrow is loaded.</small></div>}
           </div>
-          <p className={styles.estimateNote}>Travel falls back to 30 min when a Calendar event has a location but no live route is active. Add <code>travel:45</code> or <code>prep:20</code> to event notes for an explicit override.</p>
+          <p className={styles.estimateNote}>SILK now prefers explicit note overrides, then live routes, then learned recurring travel/prep patterns, and only then its safe defaults. Add <code>travel:45</code> or <code>prep:20</code> to keep an explicit value authoritative.</p>
         </article>
 
         <article className={`${styles.card} ${styles.routeCard}`}>

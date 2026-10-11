@@ -24,7 +24,7 @@ export async function buildSignals(db, now = Math.floor(Date.now() / 1000)) {
   const next = upcoming.find((event) => !Number(event.all_day) && Number(event.start_at) >= now - 300) || null;
 
   if (next) {
-    const plan = eventPlan(next, profile);
+    const plan = adaptiveEventPlan(next, profile);
     const untilStart = Math.round((Number(next.start_at) - now) / 60);
     const untilLeave = Math.round((plan.leaveBy - now) / 60);
     const untilPrep = Math.round((plan.prepStart - now) / 60);
@@ -123,7 +123,7 @@ export async function buildSignals(db, now = Math.floor(Date.now() / 1000)) {
   return dedupeSignals(signals).slice(0, 8);
 }
 
-function eventPlan(event, profile) {
+export function adaptiveEventPlan(event, profile) {
   const category = normalizeCategory(event.category);
   const prepOverride = noteMinutes(event.notes, "prep");
   const travelOverride = noteMinutes(event.notes, "travel");
@@ -150,7 +150,7 @@ async function sleepSignal(db, profile, now) {
     ORDER BY start_at, id LIMIT 1
   `).bind(start, cutoff).first().catch(() => null);
   if (!event) return null;
-  const plan = eventPlan(event, profile);
+  const plan = adaptiveEventPlan(event, profile);
   const wakeAt = plan.prepStart - 60 * 60;
   const bedtime = wakeAt - 8 * 60 * 60;
   const windDown = bedtime - 30 * 60;

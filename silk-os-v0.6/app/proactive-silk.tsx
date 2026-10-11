@@ -88,12 +88,15 @@ export default function ProactiveSilk() {
   }, [enabled, showSignal]);
 
   useEffect(() => {
-    void initialize();
+    const initial = window.setTimeout(() => void initialize(), 0);
     const onEnable = () => void initialize().then((ready) => {
       if (ready) window.setTimeout(() => void poll(), 0);
     });
     window.addEventListener("silk-enable-proactive", onEnable);
-    return () => window.removeEventListener("silk-enable-proactive", onEnable);
+    return () => {
+      window.clearTimeout(initial);
+      window.removeEventListener("silk-enable-proactive", onEnable);
+    };
   }, [initialize, poll]);
 
   useEffect(() => {

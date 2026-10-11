@@ -2,11 +2,9 @@
 
 ## Priority
 
-**HIGH PRIORITY**
+**IMPLEMENTED — V1**
 
-This feature should be treated as one of SILK's major ambient / identity experiences after the core Home and Today systems are stable.
-
-Do **not** implement yet. This document records the approved concept so it is not lost.
+The initial ambient experience is now implemented after the Home / Today foundation stabilized. Continue treating quality, performance, quote provenance, and licensing as high-priority constraints for future expansion.
 
 ---
 
@@ -260,7 +258,7 @@ It should feel like an ambient reminder of what humans can achieve while the sys
 
 # Current decision
 
-**Approved concept. HIGH PRIORITY. Do not build yet.**
+**Implemented in V1. Continue iterating deliberately.**
 
 The intended feature is a SILK idle screensaver with two flagship experiences:
 
@@ -268,3 +266,21 @@ The intended feature is a SILK idle screensaver with two flagship experiences:
 - a cinematic **3D Quote Slideshow** featuring one person at a time with a verified quote integrated into the scene
 
 This feature should be revisited after the current Home / Today foundation is stable.
+
+---
+
+## V1 implementation status
+
+Built in October 2026:
+
+- idle activation with configurable delay and disable control
+- exact-state return via non-destructive overlay
+- 3D / perspective Greatness Poster using original abstract figure monuments
+- verified-source quote slideshow
+- mixed collection spanning science, computing, education, leadership, athletics, and spaceflight
+- reduced-motion fallback
+- typing / modal / approval suppression
+- manual **Inspire me** launch from Momentum
+- no third-party portrait assets in V1, avoiding unverified licensing dependencies
+
+Future versions can add licensed or original generated visual likenesses, more collections, favorites, biography drill-down, and richer WebGL depth if performance testing supports it.

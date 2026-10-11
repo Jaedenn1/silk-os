@@ -202,6 +202,26 @@ export async function buildAdaptiveTimeProfile(db) {
   };
 }
 
+export async function recordDurationObservation(db, { category = "other", context = "", planned, actual, occurredAt = null } = {}) {
+  await ensureSchema(db);
+  const plannedMinutes = boundedMinutes(planned, true);
+  const actualMinutes = boundedMinutes(actual, true);
+  if (!plannedMinutes || !actualMinutes) return null;
+  return insertObservation(db, {
+    kind: "duration",
+    category: normalizeCategory(category),
+    context: clean(context, 180),
+    planned: plannedMinutes,
+    actual: actualMinutes,
+    metadata: {},
+    occurredAt: Number(occurredAt) || Math.floor(Date.now() / 1000),
+  });
+}
+
+export function sampleConfidence(samples) {
+  return confidence(samples);
+}
+
 async function insertObservation(db, input) {
   const result = await db.prepare(`
     INSERT INTO ${OBSERVATION_TABLE}
@@ -254,7 +274,7 @@ async function ensureSchema(db) {
   await schemaPromise;
 }
 
-function robustMinutes(values, fallback) {
+export function robustMinutes(values, fallback) {
   const valid = values.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
   if (!valid.length) return fallback;
   if (valid.length < 5) return Math.max(1, Math.round(median(valid)));

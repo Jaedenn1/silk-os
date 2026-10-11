@@ -1,3 +1,5 @@
+import { buildAdaptiveTimeProfile, recordDurationObservation } from "./silk-time-engine.js";
+
 const TIME_ZONE = "America/Toronto";
 const WEEKDAYS = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
@@ -106,7 +108,9 @@ async function recommendStudy(db) {
 }
 
 async function startStudyBlock(message, db) {
-  const duration = extractDurationMinutes(message, 45);
+  const explicitDuration = extractDurationMinutes(message, 0);
+  const profile = explicitDuration ? null : await buildAdaptiveTimeProfile(db);
+  const duration = explicitDuration || Number(profile?.study?.recommended_minutes || 45);
   const subject = extractStudySubject(message) || "Study";
   const now = Math.floor(Date.now() / 1000);
   const dateKey = localDateKey(Date.now());
@@ -194,11 +198,22 @@ async function startWorkout(message, db) {
   }
   const name = extractWorkoutName(message) || "Workout";
   const now = Math.floor(Date.now() / 1000);
+  const profile = await buildAdaptiveTimeProfile(db);
+  const plannedMinutes = Number(profile?.workout?.recommended_minutes || 60);
   const result = await db.prepare(`INSERT INTO workout_sessions (name, started_at, notes) VALUES (?1, ?2, 'Started from Ask SILK')`).bind(clean(name, 100), now).run();
   const id = Number(result?.meta?.last_row_id || 0);
-  await logAction(db, "workout.started", name, { workout_id: id || null });
-  return lifePayload(`${name} is started. I’m tracking it as your active workout.`, "workout_started", {
-    workout_session: { id: id || null, name, started_at: now, ended_at: null },
+  const dateKey = localDateKey(Date.now());
+  if (id) {
+    await db.prepare(`
+      INSERT INTO daily_items
+        (date_key, title, kind, source_type, source_id, status, scheduled_at, duration_minutes, priority, notes, updated_at)
+      VALUES (?1, ?2, 'task', 'workout', ?3, 'doing', ?4, ?5, 3, 'Started from Ask SILK', ?4)
+      ON CONFLICT(date_key, source_type, source_id) DO UPDATE SET status='doing', scheduled_at=excluded.scheduled_at, duration_minutes=excluded.duration_minutes, updated_at=excluded.updated_at
+    `).bind(dateKey, clean(name, 300), `workout-session:${id}`, now, plannedMinutes).run().catch(() => null);
+  }
+  await logAction(db, "workout.started", name, { workout_id: id || null, planned_minutes: plannedMinutes });
+  return lifePayload(`${name} is started. I’m tracking it as your active workout${profile?.workout?.samples >= 3 ? ` with a learned ${plannedMinutes}-minute target` : ""}.`, "workout_started", {
+    workout_session: { id: id || null, name, started_at: now, ended_at: null, planned_minutes: plannedMinutes },
   });
 }
 
@@ -208,7 +223,12 @@ async function finishWorkout(message, db) {
   const now = Math.floor(Date.now() / 1000);
   await db.prepare(`UPDATE workout_sessions SET ended_at = ?2 WHERE id = ?1`).bind(Number(active.id), now).run();
   const minutes = Math.max(1, Math.round((now - Number(active.started_at || now)) / 60));
-  await logAction(db, "workout.completed", active.name || "Workout", { workout_id: active.id, duration_minutes: minutes, message: clean(message, 300) });
+  const linked = await db.prepare(`SELECT id, duration_minutes FROM daily_items WHERE source_type='workout' AND source_id=?1 ORDER BY id DESC LIMIT 1`).bind(`workout-session:${active.id}`).first().catch(() => null);
+  if (linked) {
+    await db.prepare(`UPDATE daily_items SET status='done', completed_at=?2, completion_source='ask_silk', updated_at=?2 WHERE id=?1`).bind(Number(linked.id), now).run();
+    if (Number(linked.duration_minutes) > 0) await recordDurationObservation(db, { category: "workout", context: active.name || "Workout", planned: Number(linked.duration_minutes), actual: minutes, occurredAt: now });
+  }
+  await logAction(db, "workout.completed", active.name || "Workout", { workout_id: active.id, duration_minutes: minutes, planned_minutes: linked?.duration_minutes || null, message: clean(message, 300) });
   return lifePayload(`${active.name || "Workout"} is complete — ${minutes} minutes tracked.`, "workout_completed", {
     workout_session: { ...active, ended_at: now, duration_minutes: minutes },
   });

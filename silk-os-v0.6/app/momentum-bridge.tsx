@@ -108,6 +108,8 @@ export default function MomentumBridge() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [notifications, setNotifications] = useState("off");
+  const [screensaverEnabled, setScreensaverEnabled] = useState(true);
+  const [screensaverDelay, setScreensaverDelay] = useState(3);
 
   const syncShell = useCallback(() => {
     const workspace = document.querySelector<HTMLElement>(".workspace-scroll");
@@ -128,9 +130,14 @@ export default function MomentumBridge() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const enabled = window.localStorage.getItem("silk_proactive_enabled") === "true";
-    const permission = "Notification" in window ? Notification.permission : "unsupported";
-    setNotifications(enabled && permission === "granted" ? "on" : permission);
+    const timer = window.setTimeout(() => {
+      const enabled = window.localStorage.getItem("silk_proactive_enabled") === "true";
+      const permission = "Notification" in window ? Notification.permission : "unsupported";
+      setNotifications(enabled && permission === "granted" ? "on" : permission);
+      setScreensaverEnabled(window.localStorage.getItem("silk_screensaver_enabled") !== "false");
+      setScreensaverDelay(Math.max(1, Math.min(30, Number(window.localStorage.getItem("silk_screensaver_delay_minutes") || 3))));
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [active]);
 
   const load = useCallback(async () => {
@@ -267,6 +274,20 @@ export default function MomentumBridge() {
             {notifications === "on" && <span className={styles.enabled}><Zap size={13} /> Listening</span>}
           </div>
           <small className={styles.note}>SILK does not request notification permission until you explicitly press Enable alerts.</small>
+        </article>
+
+        <article className={`${styles.card} ${styles.proactiveCard}`}>
+          <div className={styles.cardHead}><div><span>AMBIENT SILK</span><h2>3D Inspiration Screensaver</h2></div><Sparkles size={18} /></div>
+          <p>Idle SILK becomes a quiet 3D monument to human achievement, then returns to the exact screen you left.</p>
+          <div className={styles.proactiveRow}>
+            <div><span>Idle activation</span><strong>{screensaverEnabled ? `On · ${screensaverDelay} min` : "Off"}</strong></div>
+            <div className={styles.heroActions}>
+              <button onClick={() => { const next = !screensaverEnabled; setScreensaverEnabled(next); window.localStorage.setItem("silk_screensaver_enabled", String(next)); }}>{screensaverEnabled ? "Disable" : "Enable"}</button>
+              <button onClick={() => { const next = screensaverDelay >= 10 ? 1 : screensaverDelay + 1; setScreensaverDelay(next); window.localStorage.setItem("silk_screensaver_delay_minutes", String(next)); }}>Delay {screensaverDelay}m</button>
+              <button onClick={() => window.dispatchEvent(new Event("silk-inspiration-open"))}>Launch now</button>
+            </div>
+          </div>
+          <small className={styles.note}>It will not activate while you are typing, editing a field, or handling a modal/approval. Reduced-motion devices get the static fallback.</small>
         </article>
       </section>
     </div>,

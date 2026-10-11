@@ -1,3 +1,5 @@
+import { recordDurationObservation } from "./silk-time-engine.js";
+
 const HISTORY_TABLE = "silk_completion_history";
 const CALENDAR_TABLE = "silk_calendar_events_v2";
 const TIME_ZONE = "America/Toronto";
@@ -405,7 +407,7 @@ async function applyCompletion(db, pending, result, source) {
     }
   } else if (pending.entity_type === "daily_item") {
     if (!await tableExists(db, "daily_items")) throw new CompletionError(404, "Today item not found.");
-    const row = await db.prepare(`SELECT id, title, source_type, scheduled_at, duration_minutes FROM daily_items WHERE id = ?1`).bind(Number(pending.entity_id)).first();
+    const row = await db.prepare(`SELECT id, title, source_type, status, scheduled_at, duration_minutes FROM daily_items WHERE id = ?1`).bind(Number(pending.entity_id)).first();
     if (!row) throw new CompletionError(404, "Today item not found.");
     title = clean(row.title, 240);
     category = normalizeCategory(row.source_type, row.title);
@@ -418,7 +420,15 @@ async function applyCompletion(db, pending, result, source) {
           updated_at = ?4
       WHERE id = ?1
     `).bind(Number(row.id), result === "completed" ? "done" : "skipped", source, now).run();
-    if (result === "completed") await syncDailyCompletionToModules(db, row, category, now);
+    if (result === "completed") {
+      await syncDailyCompletionToModules(db, row, category, now);
+      const planned = Number(row.duration_minutes || 0);
+      const actual = row.scheduled_at ? Math.max(1, Math.round((now - Number(row.scheduled_at)) / 60)) : 0;
+      const reasonable = planned > 0 && actual >= 5 && actual <= Math.max(planned + 30, planned * 2);
+      if (row.status === "doing" && reasonable && ["study", "workout", "project"].includes(category)) {
+        await recordDurationObservation(db, { category, context: row.title, planned, actual, occurredAt: now });
+      }
+    }
   } else {
     throw new CompletionError(400, "Unsupported completion target.");
   }

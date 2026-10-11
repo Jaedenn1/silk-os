@@ -7,6 +7,8 @@ import { tryHandleSilkCalendarChat } from "./silk-calendar-chat.js";
 import { tryHandleSilkLifeChat } from "./silk-life-chat.js";
 import { handleSilkMaps, mapsErrorResponse } from "./silk-maps.js";
 import { handleSilkCompletions, completionErrorResponse } from "./silk-completions.js";
+import { handleSilkTimeEngine, timeEngineErrorResponse } from "./silk-time-engine.js";
+import { handleSilkProactive, proactiveErrorResponse } from "./silk-proactive.js";
 import { classifyAutomaticChatTier, routeAutomaticModelEnv } from "./model-routing.js";
 
 interface Env {
@@ -98,6 +100,34 @@ const worker = {
         return withSecurityHeaders(await handleSilkCompletions(request, env));
       } catch (error) {
         return withSecurityHeaders(completionErrorResponse(error));
+      }
+    }
+
+    if (url.pathname.startsWith("/api/time-engine/")) {
+      if (!(await ownerSessionIsAuthenticated(request, env, ctx))) {
+        return withSecurityHeaders(new Response(JSON.stringify({ error: "Unlock SILK before using adaptive time intelligence." }), {
+          status: 401,
+          headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+        }));
+      }
+      try {
+        return withSecurityHeaders(await handleSilkTimeEngine(request, env));
+      } catch (error) {
+        return withSecurityHeaders(timeEngineErrorResponse(error));
+      }
+    }
+
+    if (url.pathname.startsWith("/api/proactive/")) {
+      if (!(await ownerSessionIsAuthenticated(request, env, ctx))) {
+        return withSecurityHeaders(new Response(JSON.stringify({ error: "Unlock SILK before using proactive signals." }), {
+          status: 401,
+          headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" },
+        }));
+      }
+      try {
+        return withSecurityHeaders(await handleSilkProactive(request, env));
+      } catch (error) {
+        return withSecurityHeaders(proactiveErrorResponse(error));
       }
     }
 
