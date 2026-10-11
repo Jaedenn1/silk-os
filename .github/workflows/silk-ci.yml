@@ -42,8 +42,7 @@ jobs:
       - name: Install dependencies
         run: npm run install:ci
 
-      - name: Lint (advisory — legacy debt)
-        continue-on-error: true
+      - name: Lint
         run: npm run lint
 
       - name: Verified production build
