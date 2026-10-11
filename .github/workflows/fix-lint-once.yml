@@ -1,0 +1,105 @@
+name: Fix SILK lint debt once
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+          cache: npm
+          cache-dependency-path: silk-os-v0.6/package-lock.json
+
+      - name: Repair lint issues
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new):
+              file = Path(path)
+              text = file.read_text()
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"Expected exactly one match in {path}, found {count}: {old[:80]!r}")
+              file.write_text(text.replace(old, new, 1))
+
+          replace_once(
+              "silk-os-v0.6/app/calendar/silk-calendar.tsx",
+              '''  useEffect(() => {\n    void refreshPending();\n    const timer = window.setInterval(() => void refreshPending(), 60_000);\n    return () => window.clearInterval(timer);\n  }, [refreshPending]);''',
+              '''  useEffect(() => {\n    const initial = window.setTimeout(() => void refreshPending(), 0);\n    const timer = window.setInterval(() => void refreshPending(), 60_000);\n    return () => {\n      window.clearTimeout(initial);\n      window.clearInterval(timer);\n    };\n  }, [refreshPending]);''',
+          )
+
+          replace_once(
+              "silk-os-v0.6/app/calendar/silk-calendar.tsx",
+              '''          <a className={styles.secondary} href="/">Back to SILK</a>''',
+              '''          <button type="button" className={styles.secondary} onClick={() => window.location.assign("/")}>Back to SILK</button>''',
+          )
+
+          replace_once(
+              "silk-os-v0.6/app/home-v2-bridge.tsx",
+              '''  X,\n} from "lucide-react";''',
+              '''} from "lucide-react";''',
+          )
+
+          replace_once(
+              "silk-os-v0.6/app/home-v2-bridge.tsx",
+              '''  useEffect(() => {\n    syncShell();\n    const observer = new MutationObserver(syncShell);\n    observer.observe(document.body, { childList: true, subtree: true, characterData: true });\n    return () => observer.disconnect();\n  }, [syncShell]);''',
+              '''  useEffect(() => {\n    const initial = window.setTimeout(syncShell, 0);\n    const observer = new MutationObserver(syncShell);\n    observer.observe(document.body, { childList: true, subtree: true, characterData: true });\n    return () => {\n      window.clearTimeout(initial);\n      observer.disconnect();\n    };\n  }, [syncShell]);''',
+          )
+
+          replace_once(
+              "silk-os-v0.6/app/today-v2-bridge.tsx",
+              '''  useEffect(() => {\n    syncShell();\n    const observer = new MutationObserver(syncShell);\n    observer.observe(document.body, { childList: true, subtree: true, characterData: true });\n    return () => observer.disconnect();\n  }, [syncShell]);''',
+              '''  useEffect(() => {\n    const initial = window.setTimeout(syncShell, 0);\n    const observer = new MutationObserver(syncShell);\n    observer.observe(document.body, { childList: true, subtree: true, characterData: true });\n    return () => {\n      window.clearTimeout(initial);\n      observer.disconnect();\n    };\n  }, [syncShell]);''',
+          )
+
+          replace_once(
+              "silk-os-v0.6/app/today-v2-bridge.tsx",
+              '''  useEffect(() => {\n    if (active) void load();\n  }, [active, load]);''',
+              '''  useEffect(() => {\n    if (!active) return;\n    const initial = window.setTimeout(() => void load(), 0);\n    return () => window.clearTimeout(initial);\n  }, [active, load]);''',
+          )
+          PY
+
+      - name: Prepare SILK scripts
+        working-directory: silk-os-v0.6
+        run: chmod +x scripts/*.sh
+
+      - name: Install dependencies
+        working-directory: silk-os-v0.6
+        run: npm run install:ci
+
+      - name: Lint
+        working-directory: silk-os-v0.6
+        run: npm run lint
+
+      - name: Verified production build
+        working-directory: silk-os-v0.6
+        run: npm run build
+
+      - name: Run tests
+        working-directory: silk-os-v0.6
+        run: node --test tests/*.test.mjs
+
+      - name: Commit verified repairs
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add silk-os-v0.6/app/calendar/silk-calendar.tsx silk-os-v0.6/app/home-v2-bridge.tsx silk-os-v0.6/app/today-v2-bridge.tsx
+          git diff --cached --quiet && exit 0
+          git commit -m "Fix SILK React and Next lint issues"
+          git push
