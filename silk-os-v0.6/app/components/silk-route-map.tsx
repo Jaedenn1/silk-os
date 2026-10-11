@@ -25,7 +25,7 @@ export default function SilkRouteMap({ origin, destination, geometry, styleUrl }
       style: styleUrl,
       center: [origin.lon, origin.lat],
       zoom: 12,
-      attributionControl: true,
+      attributionControl: false,
       interactive: true,
     });
 
