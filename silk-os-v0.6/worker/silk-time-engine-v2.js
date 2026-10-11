@@ -138,10 +138,29 @@ export function selectContextMetric(metrics, context, epochSeconds, minimumSampl
   };
 }
 
+export function semanticPlaceContext(profile, value) {
+  const raw = cleanContext(value);
+  const needle = normalizeSemanticText(raw);
+  if (!needle) return raw;
+  let partial = null;
+  for (const place of profile?.places || []) {
+    const variants = [place?.name, place?.address, ...(Array.isArray(place?.aliases) ? place.aliases : [])]
+      .map((item) => ({ raw: cleanContext(item), normalized: normalizeSemanticText(item) }))
+      .filter((item) => item.normalized);
+    if (variants.some((item) => item.normalized === needle)) return cleanContext(place?.name) || raw;
+    const longest = variants
+      .filter((item) => item.normalized.length >= 5 && (needle.includes(item.normalized) || item.normalized.includes(needle)))
+      .sort((a, b) => b.normalized.length - a.normalized.length)[0];
+    if (longest && (!partial || longest.normalized.length > partial.score)) partial = { name: cleanContext(place?.name), score: longest.normalized.length };
+  }
+  return partial?.name || raw;
+}
+
 export function adaptiveEventPlanV2(event, profile, previousEvent = null) {
   const category = normalizeCategory(event?.category);
   const startAt = Number(event?.start_at || 0);
-  const location = cleanContext(event?.location);
+  const rawLocation = cleanContext(event?.location);
+  const location = semanticPlaceContext(profile, rawLocation);
   const title = cleanContext(event?.title);
   const prepOverride = noteMinutes(event?.notes, "prep");
   const travelOverride = noteMinutes(event?.notes, "travel");
@@ -161,7 +180,7 @@ export function adaptiveEventPlanV2(event, profile, previousEvent = null) {
         ? "category"
         : "default";
 
-  const originContext = cleanContext(previousEvent?.location);
+  const originContext = semanticPlaceContext(profile, previousEvent?.location);
   const routeKey = originContext && location ? `${originContext} → ${location}` : "";
   const routeMetric = routeKey ? selectContextMetric(profile?.travel_by_route, routeKey, startAt, 2) : null;
   const travelContext = location ? selectContextMetric(profile?.travel_by_context, location, startAt, 2) : null;
@@ -215,11 +234,11 @@ export function buildEventTransitions(events, profile) {
     transitions.push({
       from_event_id: Number(previous.id),
       from_title: String(previous.title || "Previous event"),
-      from_location: String(previous.location || ""),
+      from_location: semanticPlaceContext(profile, previous.location),
       from_end_at: Number(previous.end_at),
       to_event_id: Number(next.id),
       to_title: String(next.title || "Next event"),
-      to_location: String(next.location || ""),
+      to_location: semanticPlaceContext(profile, next.location),
       to_start_at: Number(next.start_at),
       gap_minutes: gapMinutes,
       prep_minutes: Math.round(plan.prepMinutes),
@@ -288,6 +307,10 @@ function confidenceLabel(score) {
   if (score >= 0.8) return "strong";
   if (score >= 0.55) return "useful";
   return "learning";
+}
+
+function normalizeSemanticText(value) {
+  return cleanContext(value).toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
 }
 
 function cleanContext(value) {

@@ -13,6 +13,8 @@ export async function handleSilkLocations(request, env) {
   if (request.method === "POST" && url.pathname === "/api/locations/places") {
     const body = await readBody(request);
     const input = normalizePlaceInput(body, true);
+    const duplicate = await env.DB.prepare(`SELECT id FROM ${PLACE_TABLE} WHERE is_active=1 AND lower(name)=lower(?1) LIMIT 1`).bind(input.name).first();
+    if (duplicate) throw new LocationError(409, `A saved place named “${input.name}” already exists.`);
     const now = Math.floor(Date.now() / 1000);
     const result = await env.DB.prepare(`
       INSERT INTO ${PLACE_TABLE}

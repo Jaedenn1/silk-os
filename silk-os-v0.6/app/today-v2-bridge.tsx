@@ -110,6 +110,7 @@ type RouteEstimate = {
   eventId: number;
   origin: { lat: number; lon: number };
   destination: { lat: number; lon: number; label: string; query: string };
+  context?: { origin: string; destination: string; origin_place_id: number | null; destination_place_id: number | null; origin_kind?: string | null; destination_kind?: string | null };
   travel_minutes: number;
   travel_seconds: number;
   distance_km: number;
@@ -181,6 +182,7 @@ type TimeTransition = {
 
 type AdaptiveTimeProfile = {
   version?: number;
+  places?: Array<{ id: number; name: string; kind: string; address?: string; radius_m?: number; aliases?: string[] }>;
   prep_by_category: Record<string, { minutes: number; default_minutes: number; samples: number; confidence: string; learned: boolean }>;
   prep_by_context?: ContextTimingMetric[];
   travel_by_context: ContextTimingMetric[];
@@ -285,16 +287,34 @@ function contextualMetric(metrics: ContextTimingMetric[] | undefined, context: s
   return candidates[0] || metric;
 }
 
+function semanticPlaceContext(profile: AdaptiveTimeProfile | null | undefined, value: string) {
+  const raw = String(value || "").trim();
+  const normalize = (item: string) => String(item || "").toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().replace(/\s+/g, " ");
+  const needle = normalize(raw);
+  if (!needle) return raw;
+  let partial: { name: string; score: number } | null = null;
+  for (const place of profile?.places || []) {
+    const variants = [place.name, place.address || "", ...(place.aliases || [])]
+      .map((item) => ({ raw: item, normalized: normalize(item) }))
+      .filter((item) => item.normalized);
+    if (variants.some((item) => item.normalized === needle)) return place.name;
+    const longest = variants.filter((item) => item.normalized.length >= 5 && (needle.includes(item.normalized) || item.normalized.includes(needle))).sort((a, b) => b.normalized.length - a.normalized.length)[0];
+    if (longest && (!partial || longest.normalized.length > partial.score)) partial = { name: place.name, score: longest.normalized.length };
+  }
+  return partial?.name || raw;
+}
+
 function planEvent(event: CalendarEvent, liveRoute?: RouteEstimate | null, profile?: AdaptiveTimeProfile | null, previousEvent?: CalendarEvent | null): EventPlan | null {
   if (event.all_day || !event.start_at) return null;
   const prepOverride = noteMinutes(event.notes, "prep");
   const travelOverride = noteMinutes(event.notes, "travel");
   const liveTravel = liveRoute?.eventId === event.id ? liveRoute.travel_minutes : null;
   const category = Object.prototype.hasOwnProperty.call(DEFAULT_PREP, event.category) ? event.category : "other";
-  const context = event.location.trim() || event.title.trim();
+  const context = semanticPlaceContext(profile, event.location.trim()) || event.title.trim();
   const contextPrep = contextualMetric(profile?.prep_by_context, context, event.start_at);
   const categoryPrep = profile?.prep_by_category?.[category];
-  const routeKey = previousEvent?.location?.trim() && event.location.trim() ? `${previousEvent.location.trim()} → ${event.location.trim()}` : "";
+  const originContext = semanticPlaceContext(profile, previousEvent?.location || "");
+  const routeKey = originContext && context ? `${originContext} → ${context}` : "";
   const routeTravel = routeKey ? contextualMetric(profile?.travel_by_route, routeKey, event.start_at) : null;
   const destinationTravel = event.location.trim() ? contextualMetric(profile?.travel_by_context, event.location.trim(), event.start_at) : null;
   const prepMinutes = prepOverride ?? contextPrep?.minutes ?? (categoryPrep?.learned ? categoryPrep.minutes : DEFAULT_PREP[category] ?? 10);
@@ -802,9 +822,17 @@ export default function TodayV2Bridge() {
               body: JSON.stringify({
                 kind: "travel_estimate",
                 category: routeTarget.category,
-                context_key: routeTarget.location,
+                context_key: payload.context?.destination || routeTarget.location,
                 actual_minutes: payload.travel_minutes,
-                metadata: { traffic_delay_minutes: payload.traffic?.delay_minutes || 0, provider: payload.traffic?.provider || null },
+                metadata: {
+                  origin_context: payload.context?.origin || "",
+                  destination_context: payload.context?.destination || routeTarget.location,
+                  origin_place_id: payload.context?.origin_place_id || null,
+                  destination_place_id: payload.context?.destination_place_id || null,
+                  raw_destination: routeTarget.location,
+                  traffic_delay_minutes: payload.traffic?.delay_minutes || 0,
+                  provider: payload.traffic?.provider || null,
+                },
               }),
             }).catch(() => undefined);
           } catch (routeError) {
@@ -960,7 +988,7 @@ export default function TodayV2Bridge() {
               <div><span>Distance</span><strong>{liveRoute.distance_km.toFixed(1)} km</strong></div>
               <div><span>Leave by</span><strong>{clock(routeTarget.start_at - liveRoute.travel_minutes * 60)}</strong></div>
             </div>
-            <div className={styles.routeDestination}><MapPin size={13} /><div><strong>{routeTarget.title}</strong><small>{liveRoute.destination.label} · {liveRoute.traffic.live ? `live traffic${liveRoute.traffic.affected_km ? ` · ${liveRoute.traffic.affected_km.toFixed(1)} km affected` : ""}` : "open-route fallback · no live flow"}</small></div></div>
+            <div className={styles.routeDestination}><MapPin size={13} /><div><strong>{routeTarget.title}</strong><small>{liveRoute.context ? `${liveRoute.context.origin} → ${liveRoute.context.destination} · ` : ""}{liveRoute.destination.label} · {liveRoute.traffic.live ? `live traffic${liveRoute.traffic.affected_km ? ` · ${liveRoute.traffic.affected_km.toFixed(1)} km affected` : ""}` : "open-route fallback · no live flow"}</small></div></div>
             <button className={styles.routeButton} onClick={requestLiveRoute} disabled={routeBusy}><Navigation size={14} /> {routeBusy ? "Routing…" : "Refresh from current location"}</button>
             <small className={styles.routeAttribution}>{liveRoute.traffic.live ? "TomTom live traffic · " : ""}OpenFreeMap · OpenStreetMap contributors · Photon · Valhalla fallback</small>
           </div> : <div className={styles.routePrompt}>

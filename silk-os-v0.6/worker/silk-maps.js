@@ -1,3 +1,5 @@
+import { resolvePlaceContext } from "./silk-locations.js";
+
 const DEFAULT_GEOCODER = "https://photon.komoot.io";
 const DEFAULT_ROUTER = "https://valhalla1.openstreetmap.de";
 const DEFAULT_MAP_STYLE = "https://tiles.openfreemap.org/styles/liberty";
@@ -50,6 +52,10 @@ async function routeRequest(request, env) {
   if (!destination) throw new MapsError(404, `SILK could not locate “${destinationText}”.`);
 
   const route = await routeBetween(origin, destination, mode, env);
+  const [originPlace, destinationPlace] = await Promise.all([
+    resolvePlaceContext(env.DB, { lat: origin.lat, lon: origin.lon }).catch(() => null),
+    resolvePlaceContext(env.DB, { lat: destination.lat, lon: destination.lon, text: destinationText }).catch(() => null),
+  ]);
   return json({
     origin,
     destination: {
@@ -57,6 +63,14 @@ async function routeRequest(request, env) {
       lon: destination.lon,
       label: destination.label,
       query: destinationText,
+    },
+    context: {
+      origin: originPlace?.name || "Current location",
+      destination: destinationPlace?.name || destinationText,
+      origin_place_id: originPlace?.id || null,
+      destination_place_id: destinationPlace?.id || null,
+      origin_kind: originPlace?.kind || null,
+      destination_kind: destinationPlace?.kind || null,
     },
     mode,
     travel_minutes: Math.max(1, Math.ceil(route.seconds / 60)),

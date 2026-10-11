@@ -6,6 +6,7 @@ import {
   measurementStats,
   preferredWindows,
 } from "./silk-time-engine-v2.js";
+import { listLocationPlaces, matchPlaceByText } from "./silk-locations.js";
 
 const TIME_ZONE = "America/Toronto";
 const OBSERVATION_TABLE = "silk_time_observations";
@@ -108,6 +109,8 @@ export async function buildAdaptiveTimeProfile(db) {
     ORDER BY occurred_at DESC, id DESC
     LIMIT 1000
   `).bind(since).all()).results || [];
+  const places = await listLocationPlaces(db).catch(() => []);
+  const semanticContext = (value) => matchPlaceByText(places, String(value || ""))?.name || clean(value, 180);
 
   const prepByCategory = {};
   for (const [category, fallback] of Object.entries(DEFAULT_PREP)) {
@@ -129,18 +132,25 @@ export async function buildAdaptiveTimeProfile(db) {
   const prepByContext = buildContextMetrics(
     observations
       .filter((row) => row.kind === "prep" && row.context_key)
-      .map((row) => ({ context: String(row.context_key), actual: Number(row.actual_minutes), occurredAt: Number(row.occurred_at || 0) })),
+      .map((row) => ({ context: semanticContext(row.context_key), actual: Number(row.actual_minutes), occurredAt: Number(row.occurred_at || 0) })),
     { fallback: null, max: 20 },
   );
 
   const travelRows = observations
     .filter((row) => row.kind === "travel_estimate" && row.context_key)
-    .map((row) => ({
-      context: String(row.context_key),
-      actual: Number(row.actual_minutes),
-      occurredAt: Number(row.occurred_at || 0),
-      metadata: parseMetadata(row.metadata_json),
-    }));
+    .map((row) => {
+      const metadata = parseMetadata(row.metadata_json);
+      return {
+        context: semanticContext(metadata.destination_context || row.context_key),
+        actual: Number(row.actual_minutes),
+        occurredAt: Number(row.occurred_at || 0),
+        metadata: {
+          ...metadata,
+          origin_context: semanticContext(metadata.origin_context),
+          destination_context: semanticContext(metadata.destination_context || row.context_key),
+        },
+      };
+    });
   const travelByContext = buildContextMetrics(travelRows, { fallback: 30, max: 20 });
   const travelByRoute = buildContextMetrics(
     travelRows
@@ -219,6 +229,14 @@ export async function buildAdaptiveTimeProfile(db) {
   const profile = {
     version: 2,
     generated_at: now,
+    places: places.map((place) => ({
+      id: place.id,
+      name: place.name,
+      kind: place.kind,
+      address: place.address,
+      radius_m: place.radius_m,
+      aliases: place.aliases,
+    })),
     prep_by_category: prepByCategory,
     prep_by_context: prepByContext,
     travel_by_context: travelByContext,

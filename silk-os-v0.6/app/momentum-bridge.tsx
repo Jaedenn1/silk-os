@@ -9,7 +9,9 @@ import {
   Dumbbell,
   Flame,
   FolderKanban,
+  MapPin,
   Sparkles,
+  Trash2,
   Trophy,
   Zap,
 } from "lucide-react";
@@ -67,6 +69,17 @@ type TimeProfile = {
   active_prep?: { event_id: number; category: string; started_at: number } | null;
 };
 
+type SavedPlace = {
+  id: number;
+  name: string;
+  kind: string;
+  address: string;
+  lat: number;
+  lon: number;
+  radius_m: number;
+  aliases: string[];
+};
+
 function pct(value: number | null | undefined) {
   return value == null ? "—" : `${Math.round(value)}%`;
 }
@@ -113,6 +126,12 @@ export default function MomentumBridge() {
   const [notifications, setNotifications] = useState("off");
   const [screensaverEnabled, setScreensaverEnabled] = useState(true);
   const [screensaverDelay, setScreensaverDelay] = useState(3);
+  const [places, setPlaces] = useState<SavedPlace[]>([]);
+  const [placeName, setPlaceName] = useState("");
+  const [placeKind, setPlaceKind] = useState("other");
+  const [placeAliases, setPlaceAliases] = useState("");
+  const [placeBusy, setPlaceBusy] = useState(false);
+  const [placeMessage, setPlaceMessage] = useState("");
 
   const syncShell = useCallback(() => {
     const workspace = document.querySelector<HTMLElement>(".workspace-scroll");
@@ -148,14 +167,19 @@ export default function MomentumBridge() {
     setLoading(true);
     setError("");
     try {
-      const [completionResponse, timeResponse] = await Promise.all([
+      const [completionResponse, timeResponse, placesResponse] = await Promise.all([
         fetch("/api/completions/summary", { credentials: "same-origin" }),
         fetch("/api/time-engine/profile", { credentials: "same-origin" }),
+        fetch("/api/locations/places", { credentials: "same-origin" }),
       ]);
       if (!completionResponse.ok) throw new Error("Momentum could not load completion history.");
       setSummary((await completionResponse.json()) as CompletionSummary);
       if (timeResponse.ok) setProfile((await timeResponse.json()) as TimeProfile);
       else setProfile(null);
+      if (placesResponse.ok) {
+        const payload = (await placesResponse.json().catch(() => ({}))) as { places?: SavedPlace[] };
+        setPlaces(Array.isArray(payload.places) ? payload.places : []);
+      } else setPlaces([]);
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : "Momentum could not refresh.");
     } finally {
@@ -183,6 +207,74 @@ export default function MomentumBridge() {
       setNotifications(permission);
     }
   }, []);
+
+  const saveCurrentPlace = useCallback(() => {
+    const name = placeName.trim();
+    if (!name || placeBusy) {
+      if (!name) setPlaceMessage("Name the place first — Home, Gym, Hospital, etc.");
+      return;
+    }
+    if (!navigator.geolocation) {
+      setPlaceMessage("This browser does not expose device location.");
+      return;
+    }
+    setPlaceBusy(true);
+    setPlaceMessage("Reading your current location…");
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        void (async () => {
+          try {
+            const response = await fetch("/api/locations/places", {
+              method: "POST",
+              credentials: "same-origin",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                name,
+                kind: placeKind,
+                aliases: placeAliases.split(",").map((item) => item.trim()).filter(Boolean),
+                lat: position.coords.latitude,
+                lon: position.coords.longitude,
+                radius_m: 175,
+              }),
+            });
+            const payload = (await response.json().catch(() => ({}))) as { error?: string; place?: SavedPlace };
+            if (!response.ok) throw new Error(payload.error || "SILK could not save that place.");
+            setPlaceName("");
+            setPlaceAliases("");
+            setPlaceKind("other");
+            setPlaceMessage(`${payload.place?.name || name} is now a recognized SILK place.`);
+            await load();
+          } catch (saveError) {
+            setPlaceMessage(saveError instanceof Error ? saveError.message : "SILK could not save that place.");
+          } finally {
+            setPlaceBusy(false);
+          }
+        })();
+      },
+      (locationError) => {
+        setPlaceBusy(false);
+        setPlaceMessage(locationError.code === 1 ? "Location permission was not granted." : "SILK could not read your current location.");
+      },
+      { enableHighAccuracy: false, timeout: 10_000, maximumAge: 2 * 60_000 },
+    );
+  }, [load, placeAliases, placeBusy, placeKind, placeName]);
+
+  const deletePlace = useCallback(async (place: SavedPlace) => {
+    if (placeBusy) return;
+    setPlaceBusy(true);
+    setPlaceMessage("");
+    try {
+      const response = await fetch(`/api/locations/places/${place.id}`, { method: "DELETE", credentials: "same-origin" });
+      const payload = (await response.json().catch(() => ({}))) as { error?: string };
+      if (!response.ok) throw new Error(payload.error || "SILK could not remove that place.");
+      setPlaceMessage(`${place.name} removed from Location Intelligence.`);
+      await load();
+    } catch (deleteError) {
+      setPlaceMessage(deleteError instanceof Error ? deleteError.message : "SILK could not remove that place.");
+    } finally {
+      setPlaceBusy(false);
+    }
+  }, [load, placeBusy]);
 
   const consistency = useMemo(() => {
     const history = summary?.history || [];
@@ -268,6 +360,25 @@ export default function MomentumBridge() {
             {recentWins.map((item) => <div key={item.id}><span className={styles.winDot} /><div><strong>{item.title}</strong><small>{item.category} · {relativeTime(item.occurred_at)}</small></div></div>)}
             {!recentWins.length && <p className={styles.empty}>Complete something and SILK will put the receipt here.</p>}
           </div>
+        </article>
+
+        <article className={`${styles.card} ${styles.placesCard}`}>
+          <div className={styles.cardHead}><div><span>LOCATION INTELLIGENCE</span><h2>Teach SILK the places in your life</h2></div><MapPin size={18} /></div>
+          <p>Saved places turn anonymous coordinates and Calendar addresses into stable context like Home → Gym → Hospital, so route and prep learning stays attached to the right place.</p>
+          <div className={styles.placeCapture}>
+            <input value={placeName} onChange={(event) => setPlaceName(event.target.value)} placeholder="Place name · Home, Gym, Hospital" maxLength={80} />
+            <select value={placeKind} onChange={(event) => setPlaceKind(event.target.value)}>
+              <option value="home">Home</option><option value="work">Work</option><option value="gym">Gym</option><option value="school">School</option><option value="medical">Medical</option><option value="family">Family</option><option value="other">Other</option>
+            </select>
+            <input value={placeAliases} onChange={(event) => setPlaceAliases(event.target.value)} placeholder="Aliases · optional, comma separated" maxLength={220} />
+            <button onClick={saveCurrentPlace} disabled={placeBusy || !placeName.trim()}><MapPin size={14} /> {placeBusy ? "Saving…" : "Save current location"}</button>
+          </div>
+          {placeMessage && <small className={styles.placeMessage}>{placeMessage}</small>}
+          <div className={styles.placeList}>
+            {places.map((place) => <div key={place.id}><span className={styles.placeDot} /><div><strong>{place.name}</strong><small>{place.kind}{place.aliases.length ? ` · ${place.aliases.join(" · ")}` : ""} · {place.radius_m}m recognition radius</small></div><button aria-label={`Remove ${place.name}`} onClick={() => void deletePlace(place)} disabled={placeBusy}><Trash2 size={13} /></button></div>)}
+            {!places.length && <p className={styles.empty}>No semantic places yet. Save one while you are physically there.</p>}
+          </div>
+          <small className={styles.note}>Precise coordinates are stored in SILK’s authenticated database, not committed to GitHub. Location is requested only when you press Save current location or use route calculation.</small>
         </article>
 
         <article className={`${styles.card} ${styles.proactiveCard}`}>
