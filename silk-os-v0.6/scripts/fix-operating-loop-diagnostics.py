@@ -8,9 +8,26 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
         raise SystemExit(f"{label} anchor not found")
     return text.replace(old, new, 1)
 
-# Fix the accidental duplicate export introduced by the integration patch.
+# Fix the accidental duplicate export introduced by the integration patch and
+# restore the robust-minutes helper if the duplicate-removal pass consumed it.
 time_engine = Path("worker/silk-time-engine.js")
 text = time_engine.read_text().replace("export export function sampleConfidence", "export function sampleConfidence")
+if "export function robustMinutes" not in text:
+    marker = "export function sampleConfidence(samples) {"
+    helper = '''export function robustMinutes(values, fallback) {
+  const valid = values.filter((value) => Number.isFinite(value) && value > 0).sort((a, b) => a - b);
+  if (!valid.length) return fallback;
+  if (valid.length < 5) return Math.max(1, Math.round(median(valid)));
+  const trim = Math.max(1, Math.floor(valid.length * 0.1));
+  const trimmed = valid.slice(trim, valid.length - trim);
+  const sample = trimmed.length ? trimmed : valid;
+  return Math.max(1, Math.round(sample.reduce((sum, value) => sum + value, 0) / sample.length));
+}
+
+'''
+    if marker not in text:
+        raise SystemExit("Time Engine confidence helper anchor not found")
+    text = text.replace(marker, helper + marker, 1)
 time_engine.write_text(text)
 
 # Keep Momentum's localStorage/Notification synchronization asynchronous so it
