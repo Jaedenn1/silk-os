@@ -24,7 +24,7 @@ export async function handleSilkCalendar(request, env) {
     return createEvent(request, env.DB);
   }
 
-  const match = path.match(/^\/api\/silk-calendar\/events\/(\d+)$/);
+  const match = path.match(/^\/api\/silk-calendar\/events\/(-?\d+)$/);
   if (match && request.method === "GET") {
     return getEvent(env.DB, Number(match[1]));
   }
