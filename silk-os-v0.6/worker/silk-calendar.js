@@ -2,6 +2,8 @@ const CATEGORY_VALUES = new Set(["personal", "work", "school", "study", "workout
 const COMPLETION_VALUES = new Set(["none", "pending", "completed", "not_completed"]);
 const TABLE = "silk_calendar_events_v2";
 const LEGACY_TABLE = "silk_calendar_events";
+const SEED_TABLE = "silk_calendar_seed_log";
+const OCTOBER_2026_SHIFT_SEED = "october-2026-hhs-shifts-v1";
 let schemaPromise = null;
 
 export async function handleSilkCalendar(request, env) {
@@ -63,6 +65,7 @@ async function ensureCalendarSchema(db) {
       await db.prepare(`CREATE INDEX IF NOT EXISTS idx_silk_calendar_v2_checkins ON ${TABLE}(requires_completion, completion_status, end_at)`).run();
 
       await migrateLegacyEvents(db);
+      await seedOctober2026Shifts(db);
     })().catch((error) => {
       schemaPromise = null;
       throw error;
@@ -122,6 +125,57 @@ async function migrateLegacyEvents(db) {
       // A malformed legacy row should never prevent the new calendar from working.
     }
   }
+}
+
+async function seedOctober2026Shifts(db) {
+  await db.prepare(`
+    CREATE TABLE IF NOT EXISTS ${SEED_TABLE} (
+      seed_key TEXT PRIMARY KEY,
+      applied_at INTEGER NOT NULL
+    )
+  `).run();
+
+  const seeded = await db.prepare(`SELECT seed_key FROM ${SEED_TABLE} WHERE seed_key = ?1 LIMIT 1`)
+    .bind(OCTOBER_2026_SHIFT_SEED)
+    .first();
+  if (seeded) return;
+
+  const shifts = [
+    { id: -2026101801, title: "ER Shift", start: 1792378800, end: 1792407600, notes: "ER night shift" },
+    { id: -2026102201, title: "ER Shift", start: 1792724400, end: 1792753200, notes: "ER night shift" },
+    { id: -2026102401, title: "DCT Shift", start: 1792854000, end: 1792882800, notes: "DCT shift" },
+    { id: -2026102501, title: "DCT Shift", start: 1792940400, end: 1792969200, notes: "DCT shift" },
+  ];
+  const timestamp = Math.floor(Date.now() / 1000);
+
+  for (const shift of shifts) {
+    const duplicate = await db.prepare(`
+      SELECT id FROM ${TABLE}
+      WHERE category = 'work' AND start_at = ?1 AND end_at = ?2
+      LIMIT 1
+    `).bind(shift.start, shift.end).first();
+    if (duplicate) continue;
+
+    await db.prepare(`
+      INSERT OR IGNORE INTO ${TABLE} (
+        id, title, start_at, end_at, all_day, location, notes, category,
+        requires_completion, completion_status, source, created_at, updated_at
+      ) VALUES (?1, ?2, ?3, ?4, 0, ?5, ?6, 'work', 0, 'none', ?7, ?8, ?8)
+    `).bind(
+      shift.id,
+      shift.title,
+      shift.start,
+      shift.end,
+      "Hamilton Health Sciences",
+      shift.notes,
+      OCTOBER_2026_SHIFT_SEED,
+      timestamp,
+    ).run();
+  }
+
+  await db.prepare(`INSERT OR IGNORE INTO ${SEED_TABLE} (seed_key, applied_at) VALUES (?1, ?2)`)
+    .bind(OCTOBER_2026_SHIFT_SEED, timestamp)
+    .run();
 }
 
 async function listEvents(url, db) {
