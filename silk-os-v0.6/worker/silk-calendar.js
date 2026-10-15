@@ -3,7 +3,7 @@ const COMPLETION_VALUES = new Set(["none", "pending", "completed", "not_complete
 const TABLE = "silk_calendar_events_v2";
 const LEGACY_TABLE = "silk_calendar_events";
 const SEED_TABLE = "silk_calendar_seed_log";
-const OCTOBER_2026_SHIFT_SEED = "october-2026-hhs-shifts-v1";
+const OCTOBER_2026_SHIFT_SEED = "october-2026-hhs-shifts-v2";
 let schemaPromise = null;
 
 export async function handleSilkCalendar(request, env) {
@@ -141,6 +141,7 @@ async function seedOctober2026Shifts(db) {
   if (seeded) return;
 
   const shifts = [
+    { id: -2026101501, title: "ER Shift", start: 1792119600, end: 1792148400, notes: "ER night shift" },
     { id: -2026101801, title: "ER Shift", start: 1792378800, end: 1792407600, notes: "ER night shift" },
     { id: -2026102201, title: "ER Shift", start: 1792724400, end: 1792753200, notes: "ER night shift" },
     { id: -2026102401, title: "DCT Shift", start: 1792854000, end: 1792882800, notes: "DCT shift" },
